@@ -41,6 +41,7 @@ import (
 
 	// Force-load the tracer engines to trigger registration
 	_ "github.com/morph-l2/go-ethereum/eth/tracers/js"
+	_ "github.com/morph-l2/go-ethereum/eth/tracers/live"
 	_ "github.com/morph-l2/go-ethereum/eth/tracers/native"
 
 	"gopkg.in/urfave/cli.v1"
@@ -152,6 +153,8 @@ var (
 		utils.MorphHoleskyFlag,
 		utils.MorphHoodiFlag,
 		utils.VMEnableDebugFlag,
+		utils.VMTraceFlag,
+		utils.VMTraceJsonConfigFlag,
 		utils.NetworkIdFlag,
 		utils.EthStatsURLFlag,
 		utils.FakePoWFlag,

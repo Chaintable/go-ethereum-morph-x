@@ -533,6 +533,15 @@ var (
 		Name:  "vmdebug",
 		Usage: "Record information useful for VM and contract debugging",
 	}
+	VMTraceFlag = &cli.StringFlag{
+		Name:  "vmtrace",
+		Usage: "Name of tracer which should record internal VM operations (costly)",
+	}
+	VMTraceJsonConfigFlag = &cli.StringFlag{
+		Name:  "vmtrace.jsonconfig",
+		Usage: "Tracer configuration (JSON)",
+		Value: "{}",
+	}
 	InsecureUnlockAllowedFlag = cli.BoolFlag{
 		Name:  "allow-insecure-unlock",
 		Usage: "Allow insecure account unlocking when account-related RPCs are exposed by http",
@@ -1880,6 +1889,13 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	default:
 		if cfg.NetworkId == 1 {
 			SetDNSDiscoveryDefaults(cfg, params.MainnetGenesisHash)
+		}
+	}
+	// VM tracing config.
+	if ctx.IsSet(VMTraceFlag.Name) {
+		if name := ctx.String(VMTraceFlag.Name); name != "" {
+			cfg.VMTrace = name
+			cfg.VMTraceConfig = ctx.String(VMTraceJsonConfigFlag.Name)
 		}
 	}
 }

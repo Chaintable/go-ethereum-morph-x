@@ -5,10 +5,14 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/Chaintable/pipeline/leader"
+	"github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/morph-l2/go-ethereum/consensus"
 	"github.com/morph-l2/go-ethereum/core/rawdb"
 	"github.com/morph-l2/go-ethereum/core/state"
+	"github.com/morph-l2/go-ethereum/core/tracing"
 	"github.com/morph-l2/go-ethereum/core/types"
 	"github.com/morph-l2/go-ethereum/ethdb"
 	"github.com/morph-l2/go-ethereum/log"
@@ -37,6 +41,12 @@ func (bc *BlockChain) ProcessBlock(block *types.Block, parent *types.Header, saf
 	}
 	// Enable prefetching to pull in trie node paths while processing transactions
 	statedb.StartPrefetcher("chain")
+
+	if bc.vmConfig.Tracer != nil && bc.vmConfig.Tracer.OnBlockStart != nil {
+		bc.vmConfig.Tracer.OnBlockStart(tracing.BlockEvent{
+			Block: block,
+		})
+	}
 
 	// Process block using the parent state as reference point
 	start := time.Now()
@@ -194,6 +204,49 @@ func (bc *BlockChain) SetCanonical(head *types.Block) (common.Hash, error) {
 		}
 	}
 	bc.writeHeadBlock(head)
+
+	isLeader := leader.GlobalManager.IsLeader()
+	leader.GlobalManager.RLock()
+	lastPushedBlock := tracer.NodeXPusher.LastPushedBlock()
+	leader.GlobalManager.RUnlock()
+
+	if tracer.NodeXPusher != nil && isLeader && lastPushedBlock.BlockNumber <= head.NumberU64() {
+		_, dropBlocks, newBlocks := bc.getCommonAncestor(*lastPushedBlock, ptypes.BlockContext{
+			BlockNumber: head.NumberU64(),
+			Hash:        head.Hash(),
+			ParentHash:  head.ParentHash(),
+			Timestamp:   head.Time(),
+		})
+		var blockChange *ptypes.BlockChangeNotification
+		if len(dropBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 2,
+				NewBlocks:  newBlocks,
+				DropBlocks: dropBlocks,
+			}
+		} else if len(newBlocks) > 0 {
+			blockChange = &ptypes.BlockChangeNotification{
+				ChangeType: 1,
+				NewBlocks:  newBlocks,
+			}
+		}
+
+		parent := bc.GetHeaderByHash(head.Header().ParentHash)
+
+		if parent.Root == head.Root() {
+			if bc.vmConfig.Tracer != nil && bc.vmConfig.Tracer.OnCommit != nil {
+				bc.vmConfig.Tracer.OnCommit(parent.Root, head.Root(), nil, nil, nil, nil, nil, nil)
+			}
+		}
+
+		if blockChange != nil {
+			err := tracer.NodeXPusher.PushBlockChangeNotification(blockChange)
+			if err != nil {
+				log.Error("SetCanonical PushBlockChangeNotification error", "err", err)
+			}
+			log.Info("NodeXPusher PushBlockChangeNotification", "blockChange", blockChange)
+		}
+	}
 
 	// Emit events
 	logs := bc.collectLogs(head, false)

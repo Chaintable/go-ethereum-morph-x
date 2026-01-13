@@ -73,6 +73,8 @@ type StateDB struct {
 	snapAccounts  map[common.Hash][]byte
 	snapStorage   map[common.Hash]map[common.Hash][]byte
 
+	Codes map[common.Hash][]byte // Modified contract code
+
 	// This map holds 'live' objects, which will get modified while processing a state transition.
 	stateObjects        map[common.Address]*stateObject
 	stateObjectsPending map[common.Address]struct{} // State objects finalized but not yet written to the trie
@@ -124,6 +126,8 @@ type StateDB struct {
 	StorageUpdated int
 	AccountDeleted int
 	StorageDeleted int
+
+	OnCommit tracing.CommitHook
 }
 
 // New creates a new state from a given trie.
@@ -146,13 +150,10 @@ func New(root common.Hash, db Database, snaps *snapshot.Tree) (*StateDB, error) 
 		accessList:          newAccessList(),
 		transientStorage:    newTransientStorage(),
 		hasher:              crypto.NewKeccakState(),
-	}
-	if sdb.snaps != nil {
-		if sdb.snap = sdb.snaps.Snapshot(root); sdb.snap != nil {
-			sdb.snapDestructs = make(map[common.Hash]struct{})
-			sdb.snapAccounts = make(map[common.Hash][]byte)
-			sdb.snapStorage = make(map[common.Hash]map[common.Hash][]byte)
-		}
+		Codes:               make(map[common.Hash][]byte),
+		snapDestructs:       make(map[common.Hash]struct{}),
+		snapAccounts:        make(map[common.Hash][]byte),
+		snapStorage:         make(map[common.Hash]map[common.Hash][]byte),
 	}
 	return sdb, nil
 }
@@ -534,7 +535,7 @@ func (s *StateDB) updateStateObject(obj *stateObject) {
 	// update mechanism is not symmetric to the deletion, because whereas it is
 	// enough to track account updates at commit time, deletions need tracking
 	// at transaction boundary level to ensure we capture state clearing.
-	if s.snap != nil {
+	{
 		s.snapAccounts[obj.addrHash] = snapshot.SlimAccountRLP(obj.data.Nonce, obj.data.Balance, obj.data.Root, obj.data.KeccakCodeHash, obj.data.PoseidonCodeHash, obj.data.CodeSize)
 	}
 }
@@ -652,7 +653,7 @@ func (s *StateDB) createObject(addr common.Address) (newobj, prev *stateObject) 
 	prev = s.getDeletedStateObject(addr) // Note, prev might have been deleted, we need that!
 
 	var prevdestruct bool
-	if s.snap != nil && prev != nil {
+	if prev != nil {
 		_, prevdestruct = s.snapDestructs[prev.addrHash]
 		if !prevdestruct {
 			s.snapDestructs[prev.addrHash] = struct{}{}
@@ -791,7 +792,7 @@ func (s *StateDB) Copy() *StateDB {
 	if s.prefetcher != nil {
 		state.prefetcher = s.prefetcher.copy()
 	}
-	if s.snaps != nil {
+	{
 		// In order for the miner to be able to use and make additions
 		// to the snapshot tree, we need to copy that aswell.
 		// Otherwise, any block mined by ourselves will cause gaps in the tree,
@@ -814,6 +815,10 @@ func (s *StateDB) Copy() *StateDB {
 				temp[kk] = vv
 			}
 			state.snapStorage[k] = temp
+		}
+		state.Codes = make(map[common.Hash][]byte)
+		for k, v := range s.Codes {
+			state.Codes[k] = v
 		}
 	}
 	return state
@@ -871,7 +876,7 @@ func (s *StateDB) Finalise(deleteEmptyObjects bool) {
 			// Note, we can't do this only at the end of a block because multiple
 			// transactions within the same block might self destruct and then
 			// ressurrect an account; but the snapshotter needs both events.
-			if s.snap != nil {
+			{
 				s.snapDestructs[obj.addrHash] = struct{}{} // We need to maintain account deletions explicitly (will remain set indefinitely)
 				delete(s.snapAccounts, obj.addrHash)       // Clear out any previously updated account data (may be recreated via a ressurrect)
 				delete(s.snapStorage, obj.addrHash)        // Clear out any previously updated storage data (may be recreated via a ressurrect)
@@ -990,6 +995,7 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 			// Write any contract code associated with the state object
 			if obj.code != nil && obj.dirtyCode {
 				rawdb.WriteCode(codeWriter, common.BytesToHash(obj.KeccakCodeHash()), obj.code)
+				s.Codes[common.BytesToHash(obj.KeccakCodeHash())] = obj.code
 				obj.dirtyCode = false
 			}
 			// Write any storage changes in the state object to its storage trie
@@ -1058,8 +1064,20 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 				log.Warn("Failed to cap snapshot tree", "root", root, "layers", 128, "err", err)
 			}
 		}
-		s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage = nil, nil, nil, nil
 	}
+	if s.OnCommit != nil {
+		s.OnCommit(
+			s.originalRoot,
+			root,
+			s.snapDestructs,
+			s.snapAccounts,
+			nil,
+			s.snapStorage,
+			nil,
+			s.Codes,
+		)
+	}
+	s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage, s.Codes = nil, nil, nil, nil, nil
 	return root, err
 }
 
@@ -1137,4 +1155,8 @@ func (s *StateDB) AddressInAccessList(addr common.Address) bool {
 // SlotInAccessList returns true if the given (address, slot)-tuple is in the access list.
 func (s *StateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
 	return s.accessList.Contains(addr, slot)
+}
+
+func (s *StateDB) SetOnCommitLogger(logger tracing.CommitHook) {
+	s.OnCommit = logger
 }

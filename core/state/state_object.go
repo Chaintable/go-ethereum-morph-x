@@ -218,7 +218,7 @@ func (s *stateObject) GetCommittedState(db Database, key common.Hash) common.Has
 			}
 		}()
 	}
-	if s.db.snap != nil {
+	{
 		if metrics.EnabledExpensive {
 			meter = &s.db.SnapshotStorageReads
 		}
@@ -231,7 +231,9 @@ func (s *stateObject) GetCommittedState(db Database, key common.Hash) common.Has
 		if _, destructed := s.db.snapDestructs[s.addrHash]; destructed {
 			return common.Hash{}
 		}
-		enc, err = s.db.snap.Storage(s.addrHash, crypto.Keccak256Hash(key.Bytes()))
+		if s.db.snap != nil {
+			enc, err = s.db.snap.Storage(s.addrHash, crypto.Keccak256Hash(key.Bytes()))
+		}
 	}
 	// If the snapshot is unavailable or reading from it fails, load from the database.
 	if s.db.snap == nil || err != nil {
@@ -367,7 +369,7 @@ func (s *stateObject) updateTrie(db Database) Trie {
 			s.db.StorageUpdated += 1
 		}
 		// If state snapshotting is active, cache the data til commit
-		if s.db.snap != nil {
+		{
 			if storage == nil {
 				// Retrieve the old storage map, if available, create a new one otherwise
 				if storage = s.db.snapStorage[s.addrHash]; storage == nil {
@@ -375,7 +377,12 @@ func (s *stateObject) updateTrie(db Database) Trie {
 					s.db.snapStorage[s.addrHash] = storage
 				}
 			}
-			storage[crypto.HashData(hasher, key[:])] = v // v will be nil if it's deleted
+			// snapStorage always uses RLP-encoded values for consistency (pipeline tracer expects RLP)
+			var snapV []byte
+			if (value != common.Hash{}) {
+				snapV, _ = rlp.EncodeToBytes(common.TrimLeftZeroes(value[:]))
+			}
+			storage[crypto.HashData(hasher, key[:])] = snapV // snapV will be nil if it's deleted
 		}
 		usedStorage = append(usedStorage, common.CopyBytes(key[:])) // Copy needed for closure
 	}
