@@ -1142,7 +1142,6 @@ func (s *StateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addre
 // StateDiff computes the state differences after executing transactions.
 // It returns the new state root and maps of destructs, accounts, storages, and codes.
 func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte, err error) {
-	root = s.IntermediateRoot(deleteEmptyObjects)
 	destructs = make(map[common.Hash]struct{})
 	accounts = make(map[common.Hash][]byte)
 	storages = make(map[common.Hash]map[common.Hash][]byte)
@@ -1156,22 +1155,24 @@ func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destruct
 		return blob
 	}
 
-	// Collect destructs from snapDestructs
-	for addrHash := range s.snapDestructs {
-		destructs[addrHash] = struct{}{}
-	}
+	// Step 1: Finalise to move dirtyStorage to pendingStorage
+	s.Finalise(deleteEmptyObjects)
 
-	// Collect account changes and storage changes
-	for addr := range s.stateObjectsDirty {
+	// Step 2: Collect data BEFORE updateRoot clears pendingStorage
+	for addr := range s.stateObjectsPending {
 		obj := s.stateObjects[addr]
 		if obj == nil {
 			continue
 		}
+
+		addrHash := obj.addrHash
+
+		// Collect destructs - check obj.deleted flag directly
 		if obj.deleted {
+			destructs[addrHash] = struct{}{}
 			continue
 		}
 
-		addrHash := obj.addrHash
 		// Encode account data using snapshot format
 		accounts[addrHash] = snapshot.SlimAccountRLP(
 			obj.data.Nonce,
@@ -1187,7 +1188,7 @@ func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destruct
 			codes[common.BytesToHash(obj.KeccakCodeHash())] = obj.code
 		}
 
-		// Collect storage changes
+		// Collect storage changes from pendingStorage (populated by Finalise)
 		for key, val := range obj.pendingStorage {
 			if val == obj.originStorage[key] {
 				continue
@@ -1199,5 +1200,6 @@ func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destruct
 			storages[addrHash][hash] = encode(val)
 		}
 	}
+	root = s.IntermediateRoot(deleteEmptyObjects)
 	return
 }
