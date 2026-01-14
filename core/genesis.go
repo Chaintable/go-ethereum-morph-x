@@ -610,3 +610,16 @@ func decodePrealloc(data string) GenesisAlloc {
 	}
 	return ga
 }
+
+func ConvertToGenesisAlloc(ga GenesisAlloc) types.GenesisAlloc {
+	alloc := make(types.GenesisAlloc)
+	for addr, account := range ga {
+		alloc[addr] = types.Account{
+			Balance: account.Balance,
+			Nonce:   account.Nonce,
+			Code:    account.Code,
+			Storage: account.Storage,
+		}
+	}
+	return alloc
+}

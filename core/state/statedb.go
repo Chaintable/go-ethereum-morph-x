@@ -1138,3 +1138,66 @@ func (s *StateDB) AddressInAccessList(addr common.Address) bool {
 func (s *StateDB) SlotInAccessList(addr common.Address, slot common.Hash) (addressPresent bool, slotPresent bool) {
 	return s.accessList.Contains(addr, slot)
 }
+
+// StateDiff computes the state differences after executing transactions.
+// It returns the new state root and maps of destructs, accounts, storages, and codes.
+func (s *StateDB) StateDiff(deleteEmptyObjects bool) (root common.Hash, destructs map[common.Hash]struct{}, accounts map[common.Hash][]byte, storages map[common.Hash]map[common.Hash][]byte, codes map[common.Hash][]byte, err error) {
+	root = s.IntermediateRoot(deleteEmptyObjects)
+	destructs = make(map[common.Hash]struct{})
+	accounts = make(map[common.Hash][]byte)
+	storages = make(map[common.Hash]map[common.Hash][]byte)
+	codes = make(map[common.Hash][]byte)
+
+	var encode = func(val common.Hash) []byte {
+		if val == (common.Hash{}) {
+			return nil
+		}
+		blob, _ := rlp.EncodeToBytes(common.TrimLeftZeroes(val[:]))
+		return blob
+	}
+
+	// Collect destructs from snapDestructs
+	for addrHash := range s.snapDestructs {
+		destructs[addrHash] = struct{}{}
+	}
+
+	// Collect account changes and storage changes
+	for addr := range s.stateObjectsDirty {
+		obj := s.stateObjects[addr]
+		if obj == nil {
+			continue
+		}
+		if obj.deleted {
+			continue
+		}
+
+		addrHash := obj.addrHash
+		// Encode account data using snapshot format
+		accounts[addrHash] = snapshot.SlimAccountRLP(
+			obj.data.Nonce,
+			obj.data.Balance,
+			obj.data.Root,
+			obj.data.KeccakCodeHash,
+			obj.data.PoseidonCodeHash,
+			obj.data.CodeSize,
+		)
+
+		// Collect dirty code
+		if obj.dirtyCode {
+			codes[common.BytesToHash(obj.KeccakCodeHash())] = obj.code
+		}
+
+		// Collect storage changes
+		for key, val := range obj.pendingStorage {
+			if val == obj.originStorage[key] {
+				continue
+			}
+			hash := crypto.Keccak256Hash(key[:])
+			if _, ok := storages[addrHash]; !ok {
+				storages[addrHash] = make(map[common.Hash][]byte)
+			}
+			storages[addrHash][hash] = encode(val)
+		}
+	}
+	return
+}
