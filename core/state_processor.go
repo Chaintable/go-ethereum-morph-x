@@ -133,7 +133,24 @@ func ApplyTransactionWithEVM(msg Message, config *params.ChainConfig, gp *GasPoo
 			hooks.OnTxStart(evm.GetVMContext(), tx, msg.From())
 		}
 		if hooks.OnTxEnd != nil {
-			defer func() { hooks.OnTxEnd(receipt, err) }()
+			gasPrice := big.NewInt(0)
+			defer func() {
+				if config.IsCurie(blockNumber) {
+					gasPrice = tx.GasPrice()
+				} else {
+					baseFee := evm.Context.BaseFee
+					if baseFee == nil {
+						baseFee = big.NewInt(0)
+					}
+					gasPrice = new(big.Int).Add(baseFee, tx.EffectiveGasTipValue(evm.Context.BaseFee))
+				}
+				receipt.EffectiveGasPrice = gasPrice
+				if receipt.L1Fee != nil && receipt.L1Fee.Cmp(common.Big0) > 0 && receipt.GasUsed > 0 {
+					gasUsed := new(big.Int).SetUint64(receipt.GasUsed)
+					receipt.EffectiveGasPrice = new(big.Int).Div(new(big.Int).Add(receipt.L1Fee, new(big.Int).Mul(receipt.EffectiveGasPrice, gasUsed)), gasUsed)
+				}
+				hooks.OnTxEnd(receipt, err)
+			}()
 		}
 	}
 	defer func(t0 time.Time) {

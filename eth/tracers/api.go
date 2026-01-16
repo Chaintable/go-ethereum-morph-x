@@ -27,9 +27,14 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
+	ptracer "github.com/Chaintable/pipeline/tracer"
+	ptypes "github.com/Chaintable/pipeline/types"
+	"github.com/Chaintable/pipeline/util"
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/morph-l2/go-ethereum/common/hexutil"
 	"github.com/morph-l2/go-ethereum/consensus"
@@ -1005,20 +1010,328 @@ func (api *API) traceTx(ctx context.Context, tx *types.Transaction, message core
 	return tracer.GetResult()
 }
 
+// DebankBlock traces a block and returns Debank-specific output including state diffs.
+func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*ptypes.DebankOutPut, error) {
+	var block *types.Block
+	var err error
+
+	if hash, ok := blockNrOrHash.Hash(); ok {
+		block, err = api.blockByHash(ctx, hash)
+	} else if number, ok := blockNrOrHash.Number(); ok {
+		block, err = api.blockByNumber(ctx, number)
+	} else {
+		return nil, errors.New("invalid arguments; neither block nor hash specified")
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if block.NumberU64() == 0 {
+		// 内部s3
+		header := util.BuildPilelineBlockHeader(block)
+		alloc := core.ConvertToGenesisAlloc(core.DefaultMorphMainnetGenesisBlock().Alloc)
+		blockDiff := ptracer.GenesisAllocToStateDiff(alloc)
+		blockDiff.Hash = block.Root()
+		// genesis block has no parent
+		blockDiff.ParentHash = types.EmptyRootHash
+		// 业务s3
+		blockFile := &ptypes.BlockFile{
+			Block:            util.BuildPipelineBlock(block),
+			Txs:              make([]ptypes.Transaction, 0),
+			Events:           make([]ptypes.Event, 0),
+			Traces:           make([]ptypes.Trace, 0),
+			ErrorEvents:      make([]ptypes.Event, 0),
+			ErrorTraces:      make([]ptypes.Trace, 0),
+			StorageContracts: make([]string, 0),
+		}
+
+		// 构造 genesis tx 和 trace
+		zeroAddr := "0x0000000000000000000000000000000000000000"
+		txIdx := int64(0)
+
+		// 对地址排序，确保遍历顺序确定性
+		sortedAddrs := make([]common.Address, 0, len(alloc))
+		for addr := range alloc {
+			sortedAddrs = append(sortedAddrs, addr)
+		}
+		sort.Slice(sortedAddrs, func(i, j int) bool {
+			return sortedAddrs[i].Hex() < sortedAddrs[j].Hex()
+		})
+
+		for _, addr := range sortedAddrs {
+			account := alloc[addr]
+			addrLower := strings.ToLower(addr.Hex())
+
+			// 处理有 Storage 的账户
+			if len(account.Storage) > 0 {
+				blockFile.StorageContracts = append(blockFile.StorageContracts, addrLower)
+			}
+
+			// 处理有 balance 的账户 - 构造转账 tx 和 call trace
+			if account.Balance != nil && account.Balance.Sign() > 0 {
+				// tx id: 0xgenesis01 + 13个0 + 地址(42字符) = 66字符
+				txID := fmt.Sprintf("0xgenesis01%013d%s", 0, addrLower)
+
+				tx := ptypes.Transaction{
+					ID:               txID,
+					From:             zeroAddr,
+					To:               addrLower,
+					Gas:              big.NewInt(0),
+					GasPrice:         big.NewInt(0),
+					GasUsed:          big.NewInt(0),
+					Status:           true,
+					GasFeeCap:        big.NewInt(0),
+					GasTipCap:        big.NewInt(0),
+					Input:            []byte{},
+					Nonce:            big.NewInt(0),
+					TransactionIndex: txIdx,
+					Value:            (*hexutil.Big)(account.Balance),
+				}
+				blockFile.Txs = append(blockFile.Txs, tx)
+
+				// trace id = hash(tx_id, parent_trace_id, pos_in_parent_trace)
+				traceID := util.ToHash([]string{txID, "", "0"})
+				trace := ptypes.Trace{
+					ID:                traceID,
+					From:              zeroAddr,
+					Gas:               big.NewInt(0),
+					Input:             []byte{},
+					To:                addrLower,
+					Value:             (*hexutil.Big)(account.Balance),
+					GasUsed:           big.NewInt(0),
+					Output:            []byte{},
+					CallCreateType:    "call",
+					CallType:          "call",
+					TxID:              txID,
+					ParentTraceID:     "",
+					PosInParentTrace:  0,
+					SelfStorageChange: false,
+					StorageChange:     false,
+					Subtraces:         0,
+					TraceAddress:      []int64{},
+				}
+				blockFile.Traces = append(blockFile.Traces, trace)
+				txIdx++
+			}
+
+			// 处理有 code 的账户 - 构造 create tx 和 create trace
+			if len(account.Code) > 0 {
+				// tx id: 0xgenesis02 + 13个0 + 地址(42字符) = 66字符
+				txID := fmt.Sprintf("0xgenesis02%013d%s", 0, addrLower)
+
+				tx := ptypes.Transaction{
+					ID:               txID,
+					From:             zeroAddr,
+					To:               addrLower,
+					Gas:              big.NewInt(0),
+					GasPrice:         big.NewInt(0),
+					GasUsed:          big.NewInt(0),
+					Status:           true,
+					GasFeeCap:        big.NewInt(0),
+					GasTipCap:        big.NewInt(0),
+					Input:            account.Code,
+					Nonce:            big.NewInt(0),
+					TransactionIndex: txIdx,
+					Value:            (*hexutil.Big)(big.NewInt(0)),
+				}
+				blockFile.Txs = append(blockFile.Txs, tx)
+
+				// trace id = hash(tx_id, parent_trace_id, pos_in_parent_trace)
+				traceID := util.ToHash([]string{txID, "", "0"})
+				trace := ptypes.Trace{
+					ID:                traceID,
+					From:              zeroAddr,
+					Gas:               big.NewInt(0),
+					Input:             account.Code,
+					To:                addrLower,
+					Value:             (*hexutil.Big)(big.NewInt(0)),
+					GasUsed:           big.NewInt(0),
+					Output:            account.Code, // output 直接使用 input (code)
+					CallCreateType:    "create",
+					CallType:          "",
+					TxID:              txID,
+					ParentTraceID:     "",
+					PosInParentTrace:  0,
+					SelfStorageChange: false,
+					StorageChange:     false,
+					Subtraces:         0,
+					TraceAddress:      []int64{},
+				}
+				blockFile.Traces = append(blockFile.Traces, trace)
+				txIdx++
+			}
+		}
+
+		// 添加原生代币合约创建 tx 和 trace (E地址)
+		nativeTokenAddr := "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+		nativeTokenTxID := fmt.Sprintf("0xgenesis03%013d%s", 0, nativeTokenAddr)
+
+		nativeTokenTx := ptypes.Transaction{
+			ID:               nativeTokenTxID,
+			From:             zeroAddr,
+			To:               nativeTokenAddr,
+			Gas:              big.NewInt(0),
+			GasPrice:         big.NewInt(0),
+			GasUsed:          big.NewInt(0),
+			Status:           true,
+			GasFeeCap:        big.NewInt(0),
+			GasTipCap:        big.NewInt(0),
+			Input:            []byte{},
+			Nonce:            big.NewInt(0),
+			TransactionIndex: txIdx,
+			Value:            (*hexutil.Big)(big.NewInt(0)),
+		}
+		blockFile.Txs = append(blockFile.Txs, nativeTokenTx)
+
+		nativeTokenTraceID := util.ToHash([]string{nativeTokenTxID, "", "0"})
+		nativeTokenTrace := ptypes.Trace{
+			ID:                nativeTokenTraceID,
+			From:              zeroAddr,
+			Gas:               big.NewInt(0),
+			Input:             []byte{},
+			To:                nativeTokenAddr,
+			Value:             (*hexutil.Big)(big.NewInt(0)),
+			GasUsed:           big.NewInt(0),
+			Output:            []byte{},
+			CallCreateType:    "create",
+			CallType:          "",
+			TxID:              nativeTokenTxID,
+			ParentTraceID:     "",
+			PosInParentTrace:  0,
+			SelfStorageChange: false,
+			StorageChange:     false,
+			Subtraces:         0,
+			TraceAddress:      []int64{},
+		}
+		blockFile.Traces = append(blockFile.Traces, nativeTokenTrace)
+		var stateDiffBytes []byte
+		if blockDiff != nil {
+			stateDiffBytes, err = util.EncodeToRlp(blockDiff)
+			if err != nil {
+				log.Error("Failed to encode state diff", "err", err)
+				stateDiffBytes = []byte{}
+			}
+		} else {
+			stateDiffBytes = []byte{}
+		}
+
+		return &ptypes.DebankOutPut{
+			BlockFile:      blockFile,
+			Header:         header,
+			StateDiff:      hexutil.Bytes(stateDiffBytes),
+			ValidationHash: blockFile.Validation().ValidationHash,
+		}, nil
+	}
+
+	// Get parent block for state preparation
+	parent, err := api.blockByNumberAndHash(ctx, rpc.BlockNumber(block.NumberU64()-1), block.ParentHash())
+	if err != nil {
+		return nil, err
+	}
+
+	// Prepare base state
+	statedb, err := api.backend.StateAtBlock(ctx, parent, defaultTraceReexec, nil, true, false)
+	if err != nil {
+		return nil, err
+	}
+
+	// Create pipeline tracer
+	rpcTracer := ptracer.RPCTracer{}
+	tracer := &Tracer{
+		Hooks: &tracing.Hooks{
+			OnTxStart: rpcTracer.OnTxStart,
+			OnTxEnd:   rpcTracer.OnTxEnd,
+			OnEnter:   rpcTracer.OnEnter,
+			OnExit:    rpcTracer.OnExit,
+			OnOpcode:  rpcTracer.OnOpcode,
+			OnLog:     rpcTracer.OnLog,
+		},
+		Stop:      rpcTracer.Stop,
+		GetResult: rpcTracer.GetResult,
+	}
+
+	tracingStateDB := state.NewHookedState(statedb, tracer.Hooks)
+	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), api.backend.ChainConfig(), nil)
+
+	rpcTracer.OnBlockStart(block)
+
+	var (
+		txs     = block.Transactions()
+		signer  = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
+		gp      = new(core.GasPool).AddGas(block.GasLimit())
+		usedGas = new(uint64)
+	)
+
+	for i, tx := range txs {
+		msg, err := tx.AsMessage(signer, block.BaseFee())
+		if err != nil {
+			return nil, fmt.Errorf("could not convert tx %d [%v] to message: %w", i, tx.Hash().Hex(), err)
+		}
+		statedb.SetTxContext(tx.Hash(), i)
+
+		txCtx := core.NewEVMTxContext(msg)
+		evm := vm.NewEVM(blockCtx, txCtx, tracingStateDB, api.backend.ChainConfig(), vm.Config{Tracer: tracer.Hooks})
+
+		receipt, err := core.ApplyTransactionWithEVM(msg, api.backend.ChainConfig(), gp, statedb, block.Number(), block.Hash(), tx, usedGas, evm)
+		if err != nil {
+			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
+		}
+		_ = receipt
+	}
+
+	// Get state diff
+	root, destructs, accounts, storages, codes, err := statedb.StateDiff(api.backend.ChainConfig().IsEIP158(block.Number()))
+	if err != nil {
+		return nil, fmt.Errorf("could not get state diff: %w", err)
+	}
+
+	if root != block.Header().Root {
+		return nil, fmt.Errorf("state root mismatch: expected %x, got %x", block.Header().Root, root)
+	}
+
+	parentRoot := parent.Root()
+
+	res := rpcTracer.GetOutPut(parentRoot, root, destructs, accounts, storages, codes)
+
+	return res, nil
+}
+
+// DebankAPI wraps the API for Debank-specific RPC calls
+type DebankAPI struct {
+	api *API
+}
+
+// NewDebankAPI creates a new DebankAPI
+func NewDebankAPI(api *API) *DebankAPI {
+	return &DebankAPI{api: api}
+}
+
+// DebankBlock traces a block and returns Debank-specific output
+func (d *DebankAPI) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOrHash) (*ptypes.DebankOutPut, error) {
+	return d.api.DebankBlock(ctx, blockNrOrHash)
+}
+
 // APIs return the collection of RPC services the tracer package offers.
 func APIs(backend Backend, morphTracerWrapper morphTracerWrapper) []rpc.API {
+	api := NewAPI(backend, morphTracerWrapper)
 	// Append all the local APIs and return
 	return []rpc.API{
 		{
 			Namespace: "debug",
 			Version:   "1.0",
-			Service:   NewAPI(backend, morphTracerWrapper),
+			Service:   api,
 			Public:    false,
 		},
 		{
 			Namespace: "morph",
 			Version:   "1.0",
-			Service:   TraceBlock(NewAPI(backend, morphTracerWrapper)),
+			Service:   TraceBlock(api),
+			Public:    true,
+		},
+		{
+			Namespace: "trace",
+			Version:   "1.0",
+			Service:   NewDebankAPI(api),
 			Public:    true,
 		},
 	}
