@@ -135,7 +135,7 @@ func ApplyTransactionWithEVM(msg Message, config *params.ChainConfig, gp *GasPoo
 		if hooks.OnTxEnd != nil {
 			gasPrice := big.NewInt(0)
 			defer func() {
-				if config.IsCurie(blockNumber) {
+				if !config.IsCurie(blockNumber) {
 					gasPrice = tx.GasPrice()
 				} else {
 					baseFee := evm.Context.BaseFee
