@@ -176,16 +176,25 @@ func (api *PublicDebugAPI) DumpBlock(blockNr rpc.BlockNumber) (state.Dump, error
 		_, _, stateDb := api.eth.miner.Pending()
 		return stateDb.RawDump(opts), nil
 	}
-	var block *types.Block
-	if blockNr == rpc.LatestBlockNumber {
-		block = api.eth.blockchain.CurrentBlock()
-	} else {
-		block = api.eth.blockchain.GetBlockByNumber(uint64(blockNr))
+	var header *types.Header
+	switch blockNr {
+	case rpc.LatestBlockNumber:
+		header = api.eth.blockchain.CurrentBlock().Header()
+	case rpc.SafeBlockNumber:
+		header = api.eth.blockchain.CurrentSafeBlock()
+	case rpc.FinalizedBlockNumber:
+		header = api.eth.blockchain.CurrentFinalizedBlock()
+	default:
+		block := api.eth.blockchain.GetBlockByNumber(uint64(blockNr))
+		if block == nil {
+			return state.Dump{}, fmt.Errorf("block #%d not found", blockNr)
+		}
+		header = block.Header()
 	}
-	if block == nil {
+	if header == nil {
 		return state.Dump{}, fmt.Errorf("block #%d not found", blockNr)
 	}
-	stateDb, err := api.eth.BlockChain().StateAt(block.Root())
+	stateDb, err := api.eth.BlockChain().StateAt(header.Root)
 	if err != nil {
 		return state.Dump{}, err
 	}
@@ -264,16 +273,25 @@ func (api *PublicDebugAPI) AccountRange(blockNrOrHash rpc.BlockNumberOrHash, sta
 			// the miner and operate on those
 			_, _, stateDb = api.eth.miner.Pending()
 		} else {
-			var block *types.Block
-			if number == rpc.LatestBlockNumber {
-				block = api.eth.blockchain.CurrentBlock()
-			} else {
-				block = api.eth.blockchain.GetBlockByNumber(uint64(number))
+			var header *types.Header
+			switch number {
+			case rpc.LatestBlockNumber:
+				header = api.eth.blockchain.CurrentBlock().Header()
+			case rpc.SafeBlockNumber:
+				header = api.eth.blockchain.CurrentSafeBlock()
+			case rpc.FinalizedBlockNumber:
+				header = api.eth.blockchain.CurrentFinalizedBlock()
+			default:
+				block := api.eth.blockchain.GetBlockByNumber(uint64(number))
+				if block == nil {
+					return state.IteratorDump{}, fmt.Errorf("block #%d not found", number)
+				}
+				header = block.Header()
 			}
-			if block == nil {
+			if header == nil {
 				return state.IteratorDump{}, fmt.Errorf("block #%d not found", number)
 			}
-			stateDb, err = api.eth.BlockChain().StateAt(block.Root())
+			stateDb, err = api.eth.BlockChain().StateAt(header.Root)
 			if err != nil {
 				return state.IteratorDump{}, err
 			}
@@ -658,4 +676,34 @@ func (api *MorphAPI) GetRollupBatchL1FeeByIndex(ctx context.Context, index uint6
 		collectedL1Fee = (*hexutil.Big)(l1DataFee)
 	}
 	return collectedL1Fee, nil
+}
+
+// DiskAndHeaderRoot represents both the disk state root and header root for a block.
+type DiskAndHeaderRoot struct {
+	DiskRoot   common.Hash `json:"diskRoot"`
+	HeaderRoot common.Hash `json:"headerRoot"`
+}
+
+// DiskRoot returns both the disk state root and header root for a given block.
+// This is useful for debugging cross-format state access (zkTrie ↔ MPT).
+// If no disk root mapping exists, returns the block's root for both fields.
+func (api *MorphAPI) DiskRoot(ctx context.Context, blockNrOrHash *rpc.BlockNumberOrHash) (DiskAndHeaderRoot, error) {
+	block, err := api.eth.APIBackend.BlockByNumberOrHash(ctx, *blockNrOrHash)
+	if err != nil {
+		return DiskAndHeaderRoot{}, fmt.Errorf("failed to retrieve block: %w", err)
+	}
+	if block == nil {
+		return DiskAndHeaderRoot{}, fmt.Errorf("block not found: %s", blockNrOrHash.String())
+	}
+
+	if diskRoot, _ := rawdb.ReadDiskStateRoot(api.eth.ChainDb(), block.Root()); diskRoot != (common.Hash{}) {
+		return DiskAndHeaderRoot{
+			DiskRoot:   diskRoot,
+			HeaderRoot: block.Root(),
+		}, nil
+	}
+	return DiskAndHeaderRoot{
+		DiskRoot:   block.Root(),
+		HeaderRoot: block.Root(),
+	}, nil
 }

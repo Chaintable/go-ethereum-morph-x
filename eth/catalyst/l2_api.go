@@ -82,7 +82,14 @@ func (api *l2ConsensusAPI) AssembleL2Block(params AssembleL2BlockParams) (*Execu
 	}
 
 	start := time.Now()
-	newBlockResult, err := api.eth.Miner().BuildBlock(parent.Hash(), time.Now(), transactions)
+	timestamp := time.Now()
+	if params.Timestamp != nil {
+		timestamp = time.Unix(int64(*params.Timestamp), 0)
+	}
+	if api.eth.BlockChain().Config().IsJadeFork(uint64(timestamp.Unix())) == api.eth.BlockChain().Config().Morph.UseZktrie {
+		return nil, fmt.Errorf("cannot assemble block for fork, useZKtrie: %v, please switch geth", api.eth.BlockChain().Config().Morph.UseZktrie)
+	}
+	newBlockResult, err := api.eth.Miner().BuildBlock(parent.Hash(), timestamp, transactions)
 	if err != nil {
 		return nil, err
 	}
@@ -359,4 +366,96 @@ func (api *l2ConsensusAPI) isVerified(blockHash common.Hash) (executionResult, b
 	defer api.verifiedMapLock.RUnlock()
 	er, found := api.verified[blockHash]
 	return er, found
+}
+
+// SetBlockTags sets the safe and finalized block by hash.
+// This is called by the node layer when it determines the safe/finalized
+// status based on L1 batch information.
+func (api *l2ConsensusAPI) SetBlockTags(safeBlockHash common.Hash, finalizedBlockHash common.Hash) error {
+	bc := api.eth.BlockChain()
+
+	// Set finalized block
+	if finalizedBlockHash != (common.Hash{}) {
+		finalizedHeader := bc.GetHeaderByHash(finalizedBlockHash)
+		if finalizedHeader == nil {
+			return fmt.Errorf("finalized block %s not found", finalizedBlockHash.Hex())
+		}
+		bc.SetFinalized(finalizedHeader)
+		log.Info("Set finalized block", "number", finalizedHeader.Number, "hash", finalizedBlockHash)
+	}
+
+	// Set safe block
+	if safeBlockHash != (common.Hash{}) {
+		safeHeader := bc.GetHeaderByHash(safeBlockHash)
+		if safeHeader == nil {
+			return fmt.Errorf("safe block %s not found", safeBlockHash.Hex())
+		}
+		bc.SetSafe(safeHeader)
+		log.Info("Set safe block", "number", safeHeader.Number, "hash", safeBlockHash)
+	}
+
+	return nil
+}
+
+// AssembleL2BlockV2 assembles a new L2 block based on parent hash.
+// This differs from AssembleL2Block which uses block number.
+// Using parent hash allows building on any parent block, enabling future reorg support.
+func (api *l2ConsensusAPI) AssembleL2BlockV2(parentHash common.Hash, timestamp *uint64, txs [][]byte) (*ExecutableL2Data, error) {
+	api.newBlockLock.Lock()
+	defer api.newBlockLock.Unlock()
+
+	log.Info("AssembleL2BlockV2", "parentHash", parentHash.Hex())
+
+	// Get parent block by hash
+	if api.eth.BlockChain().GetHeaderByHash(parentHash) == nil {
+		return nil, fmt.Errorf("parent block not found: %s", parentHash.Hex())
+	}
+
+	// Decode transactions
+	transactions := make(types.Transactions, 0, len(txs))
+	for i, otx := range txs {
+		var tx types.Transaction
+		if err := tx.UnmarshalBinary(otx); err != nil {
+			return nil, fmt.Errorf("transaction %d is not valid: %v", i, err)
+		}
+		transactions = append(transactions, &tx)
+	}
+
+	start := time.Now()
+	ts := time.Now()
+	if timestamp != nil {
+		ts = time.Unix(int64(*timestamp), 0)
+	}
+
+	// Jade fork check: prevent building blocks with wrong storage format (MPT vs zkTrie)
+	if api.eth.BlockChain().Config().IsJadeFork(uint64(ts.Unix())) == api.eth.BlockChain().Config().Morph.UseZktrie {
+		return nil, fmt.Errorf("cannot assemble block for fork, useZKtrie: %v, please switch geth", api.eth.BlockChain().Config().Morph.UseZktrie)
+	}
+
+	newBlockResult, err := api.eth.Miner().BuildBlock(parentHash, ts, transactions)
+	if err != nil {
+		return nil, err
+	}
+
+	procTime := time.Since(start)
+	withdrawTrieRoot := api.writeVerified(newBlockResult.State, newBlockResult.Block, newBlockResult.Receipts, procTime)
+
+	return &ExecutableL2Data{
+		ParentHash:   newBlockResult.Block.ParentHash(),
+		Number:       newBlockResult.Block.NumberU64(),
+		Miner:        newBlockResult.Block.Coinbase(),
+		Timestamp:    newBlockResult.Block.Time(),
+		GasLimit:     newBlockResult.Block.GasLimit(),
+		BaseFee:      newBlockResult.Block.BaseFee(),
+		Transactions: encodeTransactions(newBlockResult.Block.Transactions()),
+
+		StateRoot:          newBlockResult.Block.Root(),
+		GasUsed:            newBlockResult.Block.GasUsed(),
+		ReceiptRoot:        newBlockResult.Block.ReceiptHash(),
+		LogsBloom:          newBlockResult.Block.Bloom().Bytes(),
+		NextL1MessageIndex: newBlockResult.Block.Header().NextL1MsgIndex,
+		WithdrawTrieRoot:   withdrawTrieRoot,
+
+		Hash: newBlockResult.Block.Hash(),
+	}, nil
 }
