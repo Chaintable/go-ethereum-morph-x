@@ -1304,7 +1304,7 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 
 	parentRoot := parent.Root()
 
-	res := rpcTracer.GetOutPut(parentRoot, root, destructs, accounts, storages, codes)
+	res := rpcTracer.GetOutPut(parentRoot, block.Header().Root, destructs, accounts, storages, codes)
 
 	return res, nil
 }
