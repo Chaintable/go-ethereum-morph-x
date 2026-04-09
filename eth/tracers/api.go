@@ -38,6 +38,7 @@ import (
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/morph-l2/go-ethereum/common/hexutil"
 	"github.com/morph-l2/go-ethereum/consensus"
+	"github.com/morph-l2/go-ethereum/consensus/misc"
 	"github.com/morph-l2/go-ethereum/core"
 	"github.com/morph-l2/go-ethereum/core/rawdb"
 	"github.com/morph-l2/go-ethereum/core/state"
@@ -1250,8 +1251,17 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 		GetResult: rpcTracer.GetResult,
 	}
 
+	// Apply hard-fork state mutations before executing transactions
+	chainConfig := api.backend.ChainConfig()
+	if chainConfig.DAOForkSupport && chainConfig.DAOForkBlock != nil && chainConfig.DAOForkBlock.Cmp(block.Number()) == 0 {
+		misc.ApplyDAOHardFork(statedb)
+	}
+	if chainConfig.CurieBlock != nil && chainConfig.CurieBlock.Cmp(block.Number()) == 0 {
+		misc.ApplyCurieHardFork(statedb)
+	}
+
 	tracingStateDB := state.NewHookedState(statedb, tracer.Hooks)
-	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), api.backend.ChainConfig(), nil)
+	blockCtx := core.NewEVMBlockContext(block.Header(), api.chainContext(ctx), chainConfig, nil)
 
 	rpcTracer.OnBlockStart(block)
 
@@ -1285,13 +1295,16 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 		return nil, fmt.Errorf("could not get state diff: %w", err)
 	}
 
-	if root != block.Header().Root {
+	// Only validate state root when trie formats match.
+	// During Jade fork transition (zkTrie -> MPT), local and header roots use different formats.
+	shouldValidateStateRoot := chainConfig.Morph.UseZktrie != chainConfig.IsJadeFork(block.Time())
+	if shouldValidateStateRoot && root != block.Header().Root {
 		return nil, fmt.Errorf("state root mismatch: expected %x, got %x", block.Header().Root, root)
 	}
 
 	parentRoot := parent.Root()
 
-	res := rpcTracer.GetOutPut(parentRoot, root, destructs, accounts, storages, codes)
+	res := rpcTracer.GetOutPut(parentRoot, block.Header().Root, destructs, accounts, storages, codes)
 
 	return res, nil
 }
