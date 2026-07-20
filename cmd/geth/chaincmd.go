@@ -75,7 +75,6 @@ It expects the genesis file as argument.`,
 			utils.RinkebyFlag,
 			utils.GoerliFlag,
 			utils.MorphFlag,
-			utils.MorphHoleskyFlag,
 			utils.MorphHoodiFlag,
 		},
 		Category: "BLOCKCHAIN COMMANDS",
@@ -106,6 +105,7 @@ The dumpgenesis command dumps the genesis block configuration in JSON format to 
 			utils.MetricsInfluxDBUsernameFlag,
 			utils.MetricsInfluxDBPasswordFlag,
 			utils.MetricsInfluxDBTagsFlag,
+			utils.MetricsInfluxDBIntervalFlag,
 			utils.MetricsInfluxDBTokenFlag,
 			utils.MetricsInfluxDBBucketFlag,
 			utils.MetricsInfluxDBOrganizationFlag,
@@ -263,7 +263,7 @@ func importChain(ctx *cli.Context) error {
 		utils.Fatalf("This command requires an argument.")
 	}
 	// Start metrics export if enabled
-	utils.SetupMetrics(ctx)
+	utils.SetupMetrics(ctx, makeMetricsConfig(ctx))
 	// Start system runtime metrics collection
 	go metrics.CollectProcessMetrics(3 * time.Second)
 
