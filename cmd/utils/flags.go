@@ -20,6 +20,7 @@ package utils
 import (
 	"crypto/ecdsa"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -174,17 +175,17 @@ var (
 		Name:  "morph",
 		Usage: "Morph mainnet network",
 	}
-	MorphHoleskyFlag = cli.BoolFlag{
-		Name:  "morph-holesky",
-		Usage: "Morph Holesky test network",
-	}
 	MorphHoodiFlag = cli.BoolFlag{
 		Name:  "morph-hoodi",
 		Usage: "Morph Hoodi test network",
 	}
 	MorphMPTFlag = cli.BoolFlag{
 		Name:  "morph-mpt",
-		Usage: "Use MPT (Merkle Patricia Trie) instead of zkTrie for state storage",
+		Usage: "Deprecated no-op: state backend is always MPT (zkTrie storage mode retired)",
+	}
+	OverrideGenesisFlag = &cli.StringFlag{
+		Name:  "override.genesis",
+		Usage: "Load genesis block and configuration from file at this path",
 	}
 	DeveloperFlag = cli.BoolFlag{
 		Name:  "dev",
@@ -560,6 +561,25 @@ var (
 		Usage: "Sets a cap on transaction fee (in ether) that can be sent via the RPC APIs (0 = no cap)",
 		Value: ethconfig.Defaults.RPCTxFeeCap,
 	}
+	RPCTxSyncDefaultTimeoutFlag = cli.DurationFlag{
+		Name:  "rpc.txsync.defaulttimeout",
+		Usage: "Default timeout for eth_sendRawTransactionSync",
+		Value: ethconfig.Defaults.TxSyncDefaultTimeout,
+	}
+	RPCTxSyncMaxTimeoutFlag = cli.DurationFlag{
+		Name:  "rpc.txsync.maxtimeout",
+		Usage: "Maximum timeout for eth_sendRawTransactionSync",
+		Value: ethconfig.Defaults.TxSyncMaxTimeout,
+	}
+	RPCTxSyncEnabledFlag = cli.BoolTFlag{
+		Name:  "rpc.txsync.enabled",
+		Usage: "Enable eth_sendRawTransactionSync receipt waiting",
+  }
+	RPCGlobalLogQueryLimit = cli.IntFlag{
+		Name:  "rpc.logquerylimit",
+		Usage: "Maximum number of alternative addresses or topics allowed per search position in eth_getLogs filter criteria (0 = no cap)",
+		Value: ethconfig.Defaults.LogQueryLimit,
+	}
 	// Logging and debug settings
 	EthStatsURLFlag = cli.StringFlag{
 		Name:  "ethstats",
@@ -865,6 +885,12 @@ var (
 		Value: metrics.DefaultConfig.InfluxDBOrganization,
 	}
 
+	MetricsInfluxDBIntervalFlag = cli.DurationFlag{
+		Name:  "metrics.influxdb.interval",
+		Usage: "Interval between metrics reports to InfluxDB (with time unit, e.g. 10s)",
+		Value: metrics.DefaultConfig.InfluxDBInterval,
+	}
+
 	CatalystFlag = cli.BoolFlag{
 		Name:  "catalyst",
 		Usage: "Catalyst mode (eth2 integration testing)",
@@ -874,6 +900,14 @@ var (
 	MaxBlockRangeFlag = cli.Int64Flag{
 		Name:  "rpc.getlogs.maxrange",
 		Usage: "Limit max fetched block range for `eth_getLogs` method",
+	}
+	// RPCRangeLimitFlag is an alias for MaxBlockRangeFlag that aligns with
+	// upstream go-ethereum PR #33163. Using either flag caps the block range
+	// (end - begin + 1) allowed in eth_getLogs; -1 and 0 both mean unlimited
+	// so existing deployments that rely on the default -1 keep working.
+	RPCRangeLimitFlag = cli.Int64Flag{
+		Name:  "rpc.rangelimit",
+		Usage: "Limit the maximum block range (end - begin + 1) allowed in range queries such as `eth_getLogs` (alias of --rpc.getlogs.maxrange; -1 or 0 = unlimited)",
 	}
 )
 
@@ -898,9 +932,6 @@ func MakeDataDir(ctx *cli.Context) string {
 		}
 		if ctx.GlobalBool(MorphFlag.Name) {
 			return filepath.Join(path, "morph")
-		}
-		if ctx.GlobalBool(MorphHoleskyFlag.Name) {
-			return filepath.Join(path, "morph-holesky")
 		}
 		if ctx.GlobalBool(MorphHoodiFlag.Name) {
 			return filepath.Join(path, "morph-hoodi")
@@ -963,8 +994,6 @@ func setBootstrapNodes(ctx *cli.Context, cfg *p2p.Config) {
 		urls = params.GoerliBootnodes
 	case ctx.GlobalBool(MorphFlag.Name):
 		urls = params.MorphBootnodes
-	case ctx.GlobalBool(MorphHoleskyFlag.Name):
-		urls = params.MorphHoleskyBootnodes
 	case ctx.GlobalBool(MorphHoodiFlag.Name):
 		urls = params.MorphHoodiBootnodes
 	case cfg.BootstrapNodes != nil || len(urls) == 0:
@@ -1415,8 +1444,6 @@ func setDataDir(ctx *cli.Context, cfg *node.Config) {
 		cfg.DataDir = filepath.Join(node.DefaultDataDir(), "sepolia")
 	case ctx.GlobalBool(MorphFlag.Name) && cfg.DataDir == node.DefaultDataDir():
 		cfg.DataDir = filepath.Join(node.DefaultDataDir(), "morph")
-	case ctx.GlobalBool(MorphHoleskyFlag.Name) && cfg.DataDir == node.DefaultDataDir():
-		cfg.DataDir = filepath.Join(node.DefaultDataDir(), "morph-holesky")
 	case ctx.GlobalBool(MorphHoodiFlag.Name) && cfg.DataDir == node.DefaultDataDir():
 		cfg.DataDir = filepath.Join(node.DefaultDataDir(), "morph-hoodi")
 	}
@@ -1563,10 +1590,33 @@ func setWhitelist(ctx *cli.Context, cfg *ethconfig.Config) {
 }
 
 func setMaxBlockRange(ctx *cli.Context, cfg *ethconfig.Config) {
-	if ctx.GlobalIsSet(MaxBlockRangeFlag.Name) {
-		cfg.MaxBlockRange = ctx.GlobalInt64(MaxBlockRangeFlag.Name)
-	} else {
-		cfg.MaxBlockRange = -1
+	// Resolution order: --rpc.rangelimit takes precedence if this helper is
+	// called directly with both aliases set. SetEthConfig rejects that
+	// combination for real CLI usage. When neither flag is set, normalize the
+	// zero value to unlimited without overwriting config-file/default values.
+	var (
+		rangelimitSet = ctx.GlobalIsSet(RPCRangeLimitFlag.Name)
+		maxrangeSet   = ctx.GlobalIsSet(MaxBlockRangeFlag.Name)
+	)
+	switch {
+	case rangelimitSet:
+		v := ctx.GlobalInt64(RPCRangeLimitFlag.Name)
+		if v <= 0 {
+			cfg.MaxBlockRange = -1
+		} else {
+			cfg.MaxBlockRange = v
+		}
+	case maxrangeSet:
+		v := ctx.GlobalInt64(MaxBlockRangeFlag.Name)
+		if v <= 0 {
+			cfg.MaxBlockRange = -1
+		} else {
+			cfg.MaxBlockRange = v
+		}
+	default:
+		if cfg.MaxBlockRange == 0 {
+			cfg.MaxBlockRange = -1
+		}
 	}
 }
 
@@ -1611,12 +1661,27 @@ func CheckExclusive(ctx *cli.Context, args ...interface{}) {
 	}
 }
 
+func validateTxSyncTimeouts(defaultTimeout, maxTimeout time.Duration) error {
+	if defaultTimeout <= 0 {
+		return fmt.Errorf("--%s must be positive", RPCTxSyncDefaultTimeoutFlag.Name)
+	}
+	if maxTimeout <= 0 {
+		return fmt.Errorf("--%s must be positive", RPCTxSyncMaxTimeoutFlag.Name)
+	}
+	if defaultTimeout > maxTimeout {
+		return fmt.Errorf("--%s must be less than or equal to --%s", RPCTxSyncDefaultTimeoutFlag.Name, RPCTxSyncMaxTimeoutFlag.Name)
+	}
+	return nil
+}
+
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Avoid conflicting network flags
-	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, RopstenFlag, RinkebyFlag, GoerliFlag, SepoliaFlag, MorphFlag, MorphHoleskyFlag, MorphHoodiFlag)
+	CheckExclusive(ctx, MainnetFlag, DeveloperFlag, RopstenFlag, RinkebyFlag, GoerliFlag, SepoliaFlag, MorphFlag, MorphHoodiFlag)
+	CheckExclusive(ctx, OverrideGenesisFlag, MainnetFlag, DeveloperFlag, RopstenFlag, RinkebyFlag, GoerliFlag, SepoliaFlag, MorphFlag, MorphHoodiFlag)
 	CheckExclusive(ctx, LightServeFlag, SyncModeFlag, "light")
 	CheckExclusive(ctx, DeveloperFlag, ExternalSignerFlag) // Can't use both ephemeral unlocked and external signer
+	CheckExclusive(ctx, RPCRangeLimitFlag, MaxBlockRangeFlag)
 	if ctx.GlobalString(GCModeFlag.Name) == GCModeArchive && ctx.GlobalUint64(TxLookupLimitFlag.Name) != 0 {
 		ctx.GlobalSet(TxLookupLimitFlag.Name, "0")
 		log.Warn("Disable transaction unindexing for archive node")
@@ -1707,6 +1772,16 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.IsSet(CacheLogSizeFlag.Name) {
 		cfg.FilterLogCacheSize = ctx.Int(CacheLogSizeFlag.Name)
 	}
+	if ctx.IsSet(RPCGlobalLogQueryLimit.Name) {
+		logQueryLimit := ctx.Int(RPCGlobalLogQueryLimit.Name)
+		if logQueryLimit < 0 {
+			Fatalf("--%s must be non-negative", RPCGlobalLogQueryLimit.Name)
+		}
+		cfg.LogQueryLimit = logQueryLimit
+	}
+	if cfg.LogQueryLimit < 0 {
+		Fatalf("LogQueryLimit must be non-negative")
+	}
 	if !ctx.Bool(SnapshotFlag.Name) {
 		// If snap-sync is requested, this flag is also required
 		if cfg.SyncMode == downloader.SnapSync {
@@ -1737,6 +1812,24 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.GlobalIsSet(RPCGlobalTxFeeCapFlag.Name) {
 		cfg.RPCTxFeeCap = ctx.GlobalFloat64(RPCGlobalTxFeeCapFlag.Name)
+	}
+	txSyncDefaultTimeout := cfg.TxSyncDefaultTimeout
+	txSyncMaxTimeout := cfg.TxSyncMaxTimeout
+	txSyncDefaultTimeoutSet := ctx.GlobalIsSet(RPCTxSyncDefaultTimeoutFlag.Name)
+	txSyncMaxTimeoutSet := ctx.GlobalIsSet(RPCTxSyncMaxTimeoutFlag.Name)
+	if txSyncDefaultTimeoutSet {
+		txSyncDefaultTimeout = ctx.GlobalDuration(RPCTxSyncDefaultTimeoutFlag.Name)
+	}
+	if txSyncMaxTimeoutSet {
+		txSyncMaxTimeout = ctx.GlobalDuration(RPCTxSyncMaxTimeoutFlag.Name)
+	}
+	if err := validateTxSyncTimeouts(txSyncDefaultTimeout, txSyncMaxTimeout); err != nil {
+		Fatalf("%v", err)
+	}
+	cfg.TxSyncDefaultTimeout = txSyncDefaultTimeout
+	cfg.TxSyncMaxTimeout = txSyncMaxTimeout
+	if ctx.GlobalIsSet(RPCTxSyncEnabledFlag.Name) {
+		cfg.TxSyncEnabled = ctx.GlobalBool(RPCTxSyncEnabledFlag.Name)
 	}
 	if ctx.GlobalIsSet(NoDiscoverFlag.Name) {
 		cfg.EthDiscoveryURLs, cfg.SnapDiscoveryURLs = []string{}, []string{}
@@ -1785,67 +1878,17 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 			cfg.NetworkId = 2818
 		}
 		cfg.Genesis = core.DefaultMorphMainnetGenesisBlock()
-
-		// Handle MPT flag
-		cfg.Genesis.Config.Morph.UseZktrie = !ctx.GlobalBool(MorphMPTFlag.Name)
-		if cfg.Genesis.Config.Morph.UseZktrie {
-			// zkTrie mode: forced archive mode
-			if ctx.GlobalString(GCModeFlag.Name) != GCModeArchive {
-				log.Crit("zkTrie mode requires --gcmode=archive")
-			}
-			log.Info("Pruning disabled (zkTrie mode)")
-			cfg.NoPruning = true
-			// disable prefetch
-			log.Info("Prefetch disabled (zkTrie mode)")
-			cfg.NoPrefetch = true
-		} else {
-			// MPT mode: pruning is allowed
-			log.Info("MPT mode enabled, pruning is allowed")
-		}
-	case ctx.GlobalBool(MorphHoleskyFlag.Name):
-		if !ctx.GlobalIsSet(NetworkIdFlag.Name) {
-			cfg.NetworkId = 2810
-		}
-		cfg.Genesis = core.DefaultMorphHoleskyGenesisBlock()
-
-		// Handle MPT flag
-		cfg.Genesis.Config.Morph.UseZktrie = !ctx.GlobalBool(MorphMPTFlag.Name)
-		if cfg.Genesis.Config.Morph.UseZktrie {
-			// zkTrie mode: forced archive mode
-			if ctx.GlobalString(GCModeFlag.Name) != GCModeArchive {
-				log.Crit("zkTrie mode requires --gcmode=archive")
-			}
-			log.Info("Pruning disabled (zkTrie mode)")
-			cfg.NoPruning = true
-			// disable prefetch
-			log.Info("Prefetch disabled (zkTrie mode)")
-			cfg.NoPrefetch = true
-		} else {
-			// MPT mode: pruning is allowed
-			log.Info("MPT mode enabled, pruning is allowed")
-		}
+		// State backend is always MPT; UseZktrie stays at the params default (false)
+		// and acts only as a legacy epoch marker. The deprecated --morph-mpt flag is
+		// a no-op kept for backwards-compatible startup scripts.
 	case ctx.GlobalBool(MorphHoodiFlag.Name):
 		if !ctx.GlobalIsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 2910
 		}
 		cfg.Genesis = core.DefaultMorphHoodiGenesisBlock()
-
-		// Handle MPT flag
-		cfg.Genesis.Config.Morph.UseZktrie = !ctx.GlobalBool(MorphMPTFlag.Name)
-		if cfg.Genesis.Config.Morph.UseZktrie {
-			// zkTrie mode: forced archive mode
-			if ctx.GlobalString(GCModeFlag.Name) != GCModeArchive {
-				log.Crit("zkTrie mode requires --gcmode=archive")
-			}
-			log.Info("Pruning disabled (zkTrie mode)")
-			cfg.NoPruning = true
-			// disable prefetch
-			log.Info("Prefetch disabled (zkTrie mode)")
-			cfg.NoPrefetch = true
-		} else {
-			// MPT mode: pruning is allowed
-			log.Info("MPT mode enabled, pruning is allowed")
-		}
+		// State backend is always MPT; UseZktrie stays at the params default (false)
+		// and acts only as a legacy epoch marker. The deprecated --morph-mpt flag is
+		// a no-op kept for backwards-compatible startup scripts.
 	case ctx.GlobalBool(DeveloperFlag.Name):
 		if !ctx.GlobalIsSet(NetworkIdFlag.Name) {
 			cfg.NetworkId = 1337
@@ -1905,6 +1948,29 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 		}
 		if !ctx.GlobalIsSet(MinerGasPriceFlag.Name) {
 			cfg.Miner.GasPrice = big.NewInt(1)
+		}
+	case ctx.GlobalString(OverrideGenesisFlag.Name) != "":
+		file, err := os.Open(ctx.GlobalString(OverrideGenesisFlag.Name))
+		if err != nil {
+			Fatalf("Failed to read genesis file: %v", err)
+		}
+		defer file.Close()
+
+		genesis := new(core.Genesis)
+		if err := json.NewDecoder(file).Decode(genesis); err != nil {
+			Fatalf("Invalid genesis file: %v", err)
+		}
+		cfg.Genesis = genesis
+		if !ctx.GlobalIsSet(NetworkIdFlag.Name) && genesis.Config != nil && genesis.Config.ChainID != nil {
+			chainID := genesis.Config.ChainID
+			// (*big.Int).Uint64() silently returns the low 64 bits of the absolute
+			// value for negative or oversized inputs, which would derive a wrong
+			// NetworkId from a user-supplied genesis JSON. Reject such values
+			// explicitly before assigning to cfg.NetworkId.
+			if chainID.Sign() < 0 || chainID.BitLen() > 64 {
+				Fatalf("Invalid chain ID in genesis file: %s (must be a non-negative integer that fits in uint64)", chainID.String())
+			}
+			cfg.NetworkId = chainID.Uint64()
 		}
 	default:
 		if cfg.NetworkId == 1 {
@@ -1982,7 +2048,8 @@ func RegisterGraphQLService(stack *node.Node, backend ethapi.Backend, filterSyst
 func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconfig.Config) *filters.FilterSystem {
 	isLightClient := ethcfg.SyncMode == downloader.LightSync
 	filterSystem := filters.NewFilterSystem(backend, filters.Config{
-		LogCacheSize: ethcfg.FilterLogCacheSize,
+		LogCacheSize:  ethcfg.FilterLogCacheSize,
+		LogQueryLimit: ethcfg.LogQueryLimit,
 	})
 	stack.RegisterAPIs([]rpc.API{{
 		Namespace: "eth",
@@ -1991,7 +2058,7 @@ func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconf
 	return filterSystem
 }
 
-func SetupMetrics(ctx *cli.Context) {
+func SetupMetrics(ctx *cli.Context, cfg metrics.Config) {
 	if metrics.Enabled {
 		log.Info("Enabling metrics collection")
 
@@ -2026,20 +2093,30 @@ func SetupMetrics(ctx *cli.Context) {
 			token        = ctx.GlobalString(MetricsInfluxDBTokenFlag.Name)
 			bucket       = ctx.GlobalString(MetricsInfluxDBBucketFlag.Name)
 			organization = ctx.GlobalString(MetricsInfluxDBOrganizationFlag.Name)
+
+			interval = cfg.InfluxDBInterval
 		)
+		if ctx.GlobalIsSet(MetricsInfluxDBIntervalFlag.Name) {
+			interval = ctx.GlobalDuration(MetricsInfluxDBIntervalFlag.Name)
+		}
+		if enableExport || enableExportV2 {
+			if err := metrics.ValidateInfluxDBInterval(interval); err != nil {
+				Fatalf("%v", err)
+			}
+		}
 
 		if enableExport {
 			tagsMap := SplitTagsFlag(ctx.GlobalString(MetricsInfluxDBTagsFlag.Name))
 
-			log.Info("Enabling metrics export to InfluxDB")
+			log.Info("Enabling metrics export to InfluxDB", "interval", interval)
 
-			go influxdb.InfluxDBWithTags(metrics.DefaultRegistry, 10*time.Second, endpoint, database, username, password, "geth.", tagsMap)
+			go influxdb.InfluxDBWithTags(metrics.DefaultRegistry, interval, endpoint, database, username, password, "geth.", tagsMap)
 		} else if enableExportV2 {
 			tagsMap := SplitTagsFlag(ctx.GlobalString(MetricsInfluxDBTagsFlag.Name))
 
-			log.Info("Enabling metrics export to InfluxDB (v2)")
+			log.Info("Enabling metrics export to InfluxDB (v2)", "interval", interval)
 
-			go influxdb.InfluxDBV2WithTags(metrics.DefaultRegistry, 10*time.Second, endpoint, token, bucket, organization, "geth.", tagsMap)
+			go influxdb.InfluxDBV2WithTags(metrics.DefaultRegistry, interval, endpoint, token, bucket, organization, "geth.", tagsMap)
 		}
 
 		if ctx.GlobalIsSet(MetricsHTTPFlag.Name) {
@@ -2104,8 +2181,6 @@ func MakeGenesis(ctx *cli.Context) *core.Genesis {
 		genesis = core.DefaultGoerliGenesisBlock()
 	case ctx.GlobalBool(MorphFlag.Name):
 		genesis = core.DefaultMorphMainnetGenesisBlock()
-	case ctx.GlobalBool(MorphHoleskyFlag.Name):
-		genesis = core.DefaultMorphHoleskyGenesisBlock()
 	case ctx.GlobalBool(MorphHoodiFlag.Name):
 		genesis = core.DefaultMorphHoodiGenesisBlock()
 	case ctx.GlobalBool(DeveloperFlag.Name):
