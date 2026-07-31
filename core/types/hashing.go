@@ -110,21 +110,31 @@ func DeriveSha(list DerivableList, hasher ListHasher) common.Hash {
 	// StackTrie requires values to be inserted in increasing hash order, which is not the
 	// order that `list` provides hashes in. This insertion sequence ensures that the
 	// order is correct.
+	//
+	// Update only fails for a zero-length value, which is impossible here because every
+	// RLP-encoded list item is at least one byte. Panic on error to keep the fail-loud
+	// semantics of consensus root calculation rather than silently dropping a leaf.
 	var indexBuf []byte
 	for i := 1; i < list.Len() && i <= 0x7f; i++ {
 		indexBuf = rlp.AppendUint64(indexBuf[:0], uint64(i))
 		value := encodeForDerive(list, i, valueBuf)
-		hasher.Update(indexBuf, value)
+		if err := hasher.Update(indexBuf, value); err != nil {
+			panic(err)
+		}
 	}
 	if list.Len() > 0 {
 		indexBuf = rlp.AppendUint64(indexBuf[:0], 0)
 		value := encodeForDerive(list, 0, valueBuf)
-		hasher.Update(indexBuf, value)
+		if err := hasher.Update(indexBuf, value); err != nil {
+			panic(err)
+		}
 	}
 	for i := 0x80; i < list.Len(); i++ {
 		indexBuf = rlp.AppendUint64(indexBuf[:0], uint64(i))
 		value := encodeForDerive(list, i, valueBuf)
-		hasher.Update(indexBuf, value)
+		if err := hasher.Update(indexBuf, value); err != nil {
+			panic(err)
+		}
 	}
 	return hasher.Hash()
 }
