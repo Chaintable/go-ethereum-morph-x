@@ -290,6 +290,8 @@ func deprecated(field string) bool {
 		return true
 	case "ethconfig.Config.EWASMInterpreter":
 		return true
+	case "core.TxPoolConfig.Blacklist":
+		return true
 	default:
 		return false
 	}
