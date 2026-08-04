@@ -77,11 +77,11 @@ func prefixedRlpHash(prefix byte, x interface{}) (h common.Hash) {
 	return h
 }
 
-// TrieHasher is the tool used to calculate the hash of derivable list.
+// ListHasher is the tool used to calculate the hash of derivable list.
 // This is internal, do not use.
-type TrieHasher interface {
+type ListHasher interface {
 	Reset()
-	Update([]byte, []byte)
+	Update(key []byte, value []byte) error
 	Hash() common.Hash
 }
 
@@ -96,37 +96,45 @@ type DerivableList interface {
 func encodeForDerive(list DerivableList, i int, buf *bytes.Buffer) []byte {
 	buf.Reset()
 	list.EncodeIndex(i, buf)
-	// It's really unfortunate that we need to do perform this copy.
-	// StackTrie holds onto the values until Hash is called, so the values
-	// written to it must not alias.
-	return common.CopyBytes(buf.Bytes())
+	return buf.Bytes()
 }
 
 // DeriveSha creates the tree hashes of transactions and receipts in a block header.
-func DeriveSha(list DerivableList, hasher TrieHasher) common.Hash {
+func DeriveSha(list DerivableList, hasher ListHasher) common.Hash {
 	hasher.Reset()
 
 	valueBuf := encodeBufferPool.Get().(*bytes.Buffer)
 	defer encodeBufferPool.Put(valueBuf)
 
+	// Hashers copy key-value pairs on Update, so the encoder buffer can be reused.
 	// StackTrie requires values to be inserted in increasing hash order, which is not the
 	// order that `list` provides hashes in. This insertion sequence ensures that the
 	// order is correct.
+	//
+	// Update only fails for a zero-length value, which is impossible here because every
+	// RLP-encoded list item is at least one byte. Panic on error to keep the fail-loud
+	// semantics of consensus root calculation rather than silently dropping a leaf.
 	var indexBuf []byte
 	for i := 1; i < list.Len() && i <= 0x7f; i++ {
 		indexBuf = rlp.AppendUint64(indexBuf[:0], uint64(i))
 		value := encodeForDerive(list, i, valueBuf)
-		hasher.Update(indexBuf, value)
+		if err := hasher.Update(indexBuf, value); err != nil {
+			panic(err)
+		}
 	}
 	if list.Len() > 0 {
 		indexBuf = rlp.AppendUint64(indexBuf[:0], 0)
 		value := encodeForDerive(list, 0, valueBuf)
-		hasher.Update(indexBuf, value)
+		if err := hasher.Update(indexBuf, value); err != nil {
+			panic(err)
+		}
 	}
 	for i := 0x80; i < list.Len(); i++ {
 		indexBuf = rlp.AppendUint64(indexBuf[:0], uint64(i))
 		value := encodeForDerive(list, i, valueBuf)
-		hasher.Update(indexBuf, value)
+		if err := hasher.Update(indexBuf, value); err != nil {
+			panic(err)
+		}
 	}
 	return hasher.Hash()
 }
