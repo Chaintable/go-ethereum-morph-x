@@ -82,6 +82,7 @@ var Defaults = Config{
 	TrieDirtyCache:          256,
 	TrieTimeout:             60 * time.Minute,
 	SnapshotCache:           102,
+	TriesInMemory:           core.DefaultTriesInMemory,
 	FilterLogCacheSize:      32,
 	LogQueryLimit:           1000,
 	Miner:                   miner.DefaultConfig,
@@ -169,6 +170,7 @@ type Config struct {
 	TrieTimeout             time.Duration
 	SnapshotCache           int
 	Preimages               bool
+	TriesInMemory           uint64
 
 	// This is the number of blocks for which logs will be cached in the filter system.
 	FilterLogCacheSize int

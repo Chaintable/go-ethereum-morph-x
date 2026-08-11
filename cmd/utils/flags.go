@@ -259,6 +259,11 @@ var (
 		Usage: "Number of recent blocks to maintain transactions index for (default = about one year, 0 = entire chain)",
 		Value: ethconfig.Defaults.TxLookupLimit,
 	}
+	TriesInMemoryFlag = cli.Uint64Flag{
+		Name:  "triesInMemory",
+		Usage: "Number of recent state tries to retain before garbage collection",
+		Value: core.DefaultTriesInMemory,
+	}
 	LightKDFFlag = cli.BoolFlag{
 		Name:  "lightkdf",
 		Usage: "Reduce key-derivation RAM & CPU usage at some expense of KDF strength",
@@ -1753,6 +1758,12 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	}
 	if ctx.GlobalIsSet(TxLookupLimitFlag.Name) {
 		cfg.TxLookupLimit = ctx.GlobalUint64(TxLookupLimitFlag.Name)
+	}
+	if ctx.GlobalIsSet(TriesInMemoryFlag.Name) {
+		if ctx.GlobalUint64(TriesInMemoryFlag.Name) == 0 {
+			Fatalf("--%s must be greater than zero", TriesInMemoryFlag.Name)
+		}
+		cfg.TriesInMemory = ctx.GlobalUint64(TriesInMemoryFlag.Name)
 	}
 	if ctx.GlobalIsSet(CacheFlag.Name) || ctx.GlobalIsSet(CacheTrieFlag.Name) {
 		cfg.TrieCleanCache = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheTrieFlag.Name) / 100
