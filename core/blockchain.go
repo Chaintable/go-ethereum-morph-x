@@ -95,6 +95,8 @@ const (
 	maxTimeFutureBlocks  = 30
 	DefaultTriesInMemory = 128
 
+	blockHistoryRecheckInterval = time.Minute
+
 	// BlockChainVersion ensures that an incompatible database forces a resync from scratch.
 	//
 	// Changelog:
@@ -134,6 +136,7 @@ type CacheConfig struct {
 	SnapshotLimit       int           // Memory allowance (MB) to use for caching snapshot entries in memory
 	Preimages           bool          // Whether to store preimage of trie key to the disk
 	TriesInMemory       uint64        // Number of recent state tries to retain before garbage collection
+	HistoryBlocks       uint64        // Number of recent blocks to retain (0 = entire chain)
 
 	SnapshotWait bool // Wait for snapshot construction on startup. TODO(karalabe): This is a dirty hack for testing, nuke it
 }
@@ -415,6 +418,10 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, chainConfig *par
 		// Start reference indexer/unindexer (using same lookup limit as tx index).
 		bc.wg.Add(1)
 		go bc.maintainReferenceIndex(txIndexBlock)
+	}
+	if bc.cacheConfig.HistoryBlocks > 0 {
+		bc.wg.Add(1)
+		go bc.maintainBlockHistory()
 	}
 
 	// If periodic cache journal is required, spin it up.
@@ -2296,6 +2303,82 @@ func (bc *BlockChain) maintainReferenceIndex(ancients uint64) {
 				log.Info("Waiting background reference indexer to exit")
 				<-done
 			}
+			return
+		}
+	}
+}
+
+// pruneBlockHistory advances the ancient-store tail after all block-dependent
+// indexes have durably advanced to the same point. The freezer head can lag the
+// chain head by FullImmutabilityThreshold, so the target is capped at the
+// currently frozen head.
+func (bc *BlockChain) pruneBlockHistory(head uint64) error {
+	history := bc.cacheConfig.HistoryBlocks
+	if history == 0 || head+1 <= history {
+		return nil
+	}
+	target := head - history + 1
+	frozen, err := bc.db.Ancients()
+	if err != nil {
+		return err
+	}
+	if target > frozen {
+		target = frozen
+	}
+	tail, err := bc.db.Tail()
+	if err != nil {
+		return err
+	}
+	if target <= tail {
+		return nil
+	}
+	txTail := rawdb.ReadTxIndexTail(bc.db)
+	referenceTail := rawdb.ReadReferenceIndexTail(bc.db)
+	if txTail == nil || referenceTail == nil || *txTail < target || *referenceTail < target {
+		log.Debug("Waiting for indexes before pruning block history", "target", target, "txTail", txTail, "referenceTail", referenceTail)
+		return nil
+	}
+	if err := bc.db.TruncateTail(target); err != nil {
+		return err
+	}
+	if err := bc.db.Sync(); err != nil {
+		return err
+	}
+	log.Info("Pruned ancient block history", "tail", target, "head", head, "retained", head-target+1)
+	return nil
+}
+
+// maintainBlockHistory periodically advances the ancient-store tail. The
+// periodic retry is required because transaction and reference unindexing run
+// asynchronously and may finish without another chain-head event.
+func (bc *BlockChain) maintainBlockHistory() {
+	defer bc.wg.Done()
+
+	headCh := make(chan ChainHeadEvent, 1)
+	sub := bc.SubscribeChainHeadEvent(headCh)
+	if sub == nil {
+		return
+	}
+	defer sub.Unsubscribe()
+
+	latest := bc.CurrentBlock().NumberU64()
+	ticker := time.NewTicker(blockHistoryRecheckInterval)
+	defer ticker.Stop()
+	prune := func() {
+		if err := bc.pruneBlockHistory(latest); err != nil {
+			log.Error("Failed to prune block history", "head", latest, "err", err)
+		}
+	}
+	prune()
+	for {
+		select {
+		case head := <-headCh:
+			latest = head.Block.NumberU64()
+			prune()
+		case <-ticker.C:
+			latest = bc.CurrentBlock().NumberU64()
+			prune()
+		case <-bc.quit:
 			return
 		}
 	}

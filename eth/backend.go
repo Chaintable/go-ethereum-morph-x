@@ -198,6 +198,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			SnapshotLimit:       config.SnapshotCache,
 			Preimages:           config.Preimages,
 			TriesInMemory:       config.TriesInMemory,
+			HistoryBlocks:       config.HistoryBlocks,
 		}
 	)
 	// TODO (MariusVanDerWijden) get rid of shouldPreserve in a follow-up PR

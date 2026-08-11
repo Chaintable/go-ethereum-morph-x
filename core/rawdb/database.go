@@ -27,10 +27,12 @@ import (
 	"github.com/olekukonko/tablewriter"
 
 	"github.com/morph-l2/go-ethereum/common"
+	"github.com/morph-l2/go-ethereum/core/types"
 	"github.com/morph-l2/go-ethereum/ethdb"
 	"github.com/morph-l2/go-ethereum/ethdb/leveldb"
 	"github.com/morph-l2/go-ethereum/ethdb/memorydb"
 	"github.com/morph-l2/go-ethereum/log"
+	"github.com/morph-l2/go-ethereum/rlp"
 )
 
 // freezerdb is a database wrapper that enabled freezer data retrievals.
@@ -51,6 +53,39 @@ func (frdb *freezerdb) Close() error {
 	}
 	if len(errs) != 0 {
 		return fmt.Errorf("%v", errs)
+	}
+	return nil
+}
+
+// validateFreezerBoundary verifies that the last ancient block is the parent
+// of the first block kept in the key-value store. It is used after ancient tail
+// deletion, when the ancient genesis is no longer available for validation.
+func validateFreezerBoundary(db ethdb.KeyValueStore, frdb *freezer, frozen uint64) error {
+	if frozen == 0 {
+		return nil
+	}
+	kvhash, err := db.Get(headerHashKey(frozen))
+	if err != nil || len(kvhash) == 0 {
+		return err
+	}
+	hash := common.BytesToHash(kvhash)
+	headerRLP, err := db.Get(headerKey(frozen, hash))
+	if err != nil {
+		return err
+	}
+	if len(headerRLP) == 0 {
+		return fmt.Errorf("missing hot boundary header #%d", frozen)
+	}
+	var header types.Header
+	if err := rlp.DecodeBytes(headerRLP, &header); err != nil {
+		return fmt.Errorf("invalid hot boundary header #%d: %v", frozen, err)
+	}
+	parent, err := frdb.Ancient(freezerHashTable, frozen-1)
+	if err != nil {
+		return fmt.Errorf("failed to retrieve ancient boundary #%d: %v", frozen-1, err)
+	}
+	if !bytes.Equal(parent, header.ParentHash.Bytes()) {
+		return fmt.Errorf("chain boundary mismatch: ancient #%d %#x != hot #%d parent %#x", frozen-1, parent, frozen, header.ParentHash)
 	}
 	return nil
 }
@@ -185,14 +220,23 @@ func NewDatabaseWithFreezer(db ethdb.KeyValueStore, freezer string, namespace st
 	// it to the freezer content.
 	if kvgenesis, _ := db.Get(headerHashKey(0)); len(kvgenesis) > 0 {
 		if frozen, _ := frdb.Ancients(); frozen > 0 {
-			// If the freezer already contains something, ensure that the genesis blocks
-			// match, otherwise we might mix up freezers across chains and destroy both
-			// the freezer and the key-value store.
-			frgenesis, err := frdb.Ancient(freezerHashTable, 0)
+			tail, err := frdb.Tail()
 			if err != nil {
-				return nil, fmt.Errorf("failed to retrieve genesis from ancient %v", err)
-			} else if !bytes.Equal(kvgenesis, frgenesis) {
-				return nil, fmt.Errorf("genesis mismatch: %#x (leveldb) != %#x (ancients)", kvgenesis, frgenesis)
+				return nil, fmt.Errorf("failed to retrieve ancient tail: %v", err)
+			}
+			if tail == 0 {
+				// If no ancient history was deleted, ensure that the genesis blocks
+				// match. Otherwise we might mix up freezers across chains.
+				frgenesis, err := frdb.Ancient(freezerHashTable, 0)
+				if err != nil {
+					return nil, fmt.Errorf("failed to retrieve genesis from ancient %v", err)
+				} else if !bytes.Equal(kvgenesis, frgenesis) {
+					return nil, fmt.Errorf("genesis mismatch: %#x (leveldb) != %#x (ancients)", kvgenesis, frgenesis)
+				}
+			} else if tail < frozen {
+				if err := validateFreezerBoundary(db, frdb, frozen); err != nil {
+					return nil, err
+				}
 			}
 			// Key-value store and freezer belong to the same network. Ensure that they
 			// are contiguous, otherwise we might end up with a non-functional freezer.

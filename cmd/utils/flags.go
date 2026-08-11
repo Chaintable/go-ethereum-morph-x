@@ -259,6 +259,11 @@ var (
 		Usage: "Number of recent blocks to maintain transactions index for (default = about one year, 0 = entire chain)",
 		Value: ethconfig.Defaults.TxLookupLimit,
 	}
+	HistoryBlocksFlag = cli.Uint64Flag{
+		Name:  "history.blocks",
+		Usage: "Number of recent blocks to retain (0 = entire chain)",
+		Value: ethconfig.Defaults.HistoryBlocks,
+	}
 	TriesInMemoryFlag = cli.Uint64Flag{
 		Name:  "triesInMemory",
 		Usage: "Number of recent state tries to retain before garbage collection",
@@ -1679,6 +1684,22 @@ func validateTxSyncTimeouts(defaultTimeout, maxTimeout time.Duration) error {
 	return nil
 }
 
+func validateHistoryConfig(historyBlocks, txLookupLimit uint64, archive bool) error {
+	if historyBlocks == 0 {
+		return nil
+	}
+	if archive {
+		return fmt.Errorf("--%s requires --%s=full", HistoryBlocksFlag.Name, GCModeFlag.Name)
+	}
+	if historyBlocks < params.FullImmutabilityThreshold {
+		return fmt.Errorf("--%s must be at least %d", HistoryBlocksFlag.Name, params.FullImmutabilityThreshold)
+	}
+	if txLookupLimit == 0 || txLookupLimit > historyBlocks {
+		return fmt.Errorf("--%s must be greater than zero and no greater than --%s", TxLookupLimitFlag.Name, HistoryBlocksFlag.Name)
+	}
+	return nil
+}
+
 // SetEthConfig applies eth-related command line flags to the config.
 func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	// Avoid conflicting network flags
@@ -1759,11 +1780,17 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 	if ctx.GlobalIsSet(TxLookupLimitFlag.Name) {
 		cfg.TxLookupLimit = ctx.GlobalUint64(TxLookupLimitFlag.Name)
 	}
+	if ctx.GlobalIsSet(HistoryBlocksFlag.Name) {
+		cfg.HistoryBlocks = ctx.GlobalUint64(HistoryBlocksFlag.Name)
+	}
 	if ctx.GlobalIsSet(TriesInMemoryFlag.Name) {
 		if ctx.GlobalUint64(TriesInMemoryFlag.Name) == 0 {
 			Fatalf("--%s must be greater than zero", TriesInMemoryFlag.Name)
 		}
 		cfg.TriesInMemory = ctx.GlobalUint64(TriesInMemoryFlag.Name)
+	}
+	if err := validateHistoryConfig(cfg.HistoryBlocks, cfg.TxLookupLimit, cfg.NoPruning); err != nil {
+		Fatalf("%v", err)
 	}
 	if ctx.GlobalIsSet(CacheFlag.Name) || ctx.GlobalIsSet(CacheTrieFlag.Name) {
 		cfg.TrieCleanCache = ctx.GlobalInt(CacheFlag.Name) * ctx.GlobalInt(CacheTrieFlag.Name) / 100

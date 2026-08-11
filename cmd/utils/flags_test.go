@@ -114,3 +114,34 @@ func TestValidateTxSyncTimeouts(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateHistoryConfig(t *testing.T) {
+	tests := []struct {
+		name          string
+		historyBlocks uint64
+		txLookupLimit uint64
+		archive       bool
+		wantErr       string
+	}{
+		{name: "disabled", historyBlocks: 0, txLookupLimit: 0, archive: true},
+		{name: "valid", historyBlocks: 600000, txLookupLimit: 600000},
+		{name: "archive", historyBlocks: 600000, txLookupLimit: 600000, archive: true, wantErr: "requires --gcmode=full"},
+		{name: "below immutability threshold", historyBlocks: 89999, txLookupLimit: 89999, wantErr: "must be at least 90000"},
+		{name: "unbounded transaction index", historyBlocks: 600000, txLookupLimit: 0, wantErr: "must be greater than zero"},
+		{name: "transaction index exceeds block history", historyBlocks: 600000, txLookupLimit: 600001, wantErr: "no greater than --history.blocks"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateHistoryConfig(tt.historyBlocks, tt.txLookupLimit, tt.archive)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}

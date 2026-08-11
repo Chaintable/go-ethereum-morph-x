@@ -313,11 +313,15 @@ func unindexTransactions(db ethdb.Database, from uint64, to uint64, interrupt ch
 				break
 			}
 			delivery := queue.PopItem().(*blockTxHashes)
-			nextNum = delivery.number + 1
 			if delivery.err != nil {
-				log.Warn("Block skipped during unindexing; tx lookup entries NOT deleted", "block", delivery.number, "err", delivery.err)
-				continue
+				log.Warn("Aborting transaction unindexing at unreadable block", "block", delivery.number, "err", delivery.err)
+				WriteTxIndexTail(batch, nextNum)
+				if err := batch.Write(); err != nil {
+					log.Crit("Failed writing batch to db", "error", err)
+				}
+				return
 			}
+			nextNum = delivery.number + 1
 			DeleteTxLookupEntries(batch, delivery.hashes)
 			txs += len(delivery.hashes)
 			blocks++
