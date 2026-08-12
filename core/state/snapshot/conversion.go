@@ -363,7 +363,9 @@ func generateTrieRoot(db ethdb.KeyValueWriter, it Iterator, account common.Hash,
 func stackTrieGenerate(db ethdb.KeyValueWriter, in chan trieKV, out chan common.Hash) {
 	t := trie.NewStackTrie(db)
 	for leaf := range in {
-		t.TryUpdate(leaf.key[:], leaf.value)
+		if err := t.TryUpdate(leaf.key[:], leaf.value); err != nil {
+			panic(err) // Really shouldn't ever happen
+		}
 	}
 	var root common.Hash
 	if db == nil {
