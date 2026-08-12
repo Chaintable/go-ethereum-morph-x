@@ -868,6 +868,11 @@ func (bc *BlockChain) Stop() {
 	if !bc.cacheConfig.TrieDirtyDisabled {
 		triedb := bc.stateCache.TrieDB()
 
+		// Persist every state retained by the configured window before committing
+		// individual checkpoints, which can otherwise uncache shared trie nodes.
+		if err := triedb.Cap(0); err != nil {
+			log.Error("Failed to flush retained state tries", "err", err)
+		}
 		for _, offset := range []uint64{0, 1, bc.cacheConfig.TriesInMemory - 1} {
 			if number := bc.CurrentBlock().NumberU64(); number > offset {
 				recent := bc.GetBlockByNumber(number - offset)

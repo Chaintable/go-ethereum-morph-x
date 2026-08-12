@@ -1585,7 +1585,6 @@ func TestCustomTriesInMemory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create tester chain: %v", err)
 	}
-	defer chain.Stop()
 	if n, err := chain.InsertChain(blocks); err != nil {
 		t.Fatalf("block %d: failed to insert into chain: %v", n, err)
 	}
@@ -1597,6 +1596,21 @@ func TestCustomTriesInMemory(t *testing.T) {
 	firstRetained := blocks[len(blocks)-int(retention)]
 	if !chain.HasBlockAndState(firstRetained.Hash(), firstRetained.NumberU64()) {
 		t.Fatalf("block %d state pruned inside configured window", firstRetained.NumberU64())
+	}
+	chain.Stop()
+
+	restarted, err := NewBlockChain(diskdb, &cacheConfig, gspec.Config, engine, vm.Config{}, nil, nil)
+	if err != nil {
+		t.Fatalf("failed to restart tester chain: %v", err)
+	}
+	defer restarted.Stop()
+	if restarted.HasBlockAndState(lastPruned.Hash(), lastPruned.NumberU64()) {
+		t.Fatalf("block %d state persisted beyond configured window", lastPruned.NumberU64())
+	}
+	for _, block := range blocks[len(blocks)-int(retention):] {
+		if !restarted.HasBlockAndState(block.Hash(), block.NumberU64()) {
+			t.Fatalf("block %d state missing after restart", block.NumberU64())
+		}
 	}
 }
 
