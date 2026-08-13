@@ -17,7 +17,6 @@
 package rawdb
 
 import (
-	"fmt"
 	"runtime"
 	"sync/atomic"
 	"time"
@@ -35,7 +34,6 @@ type blockReferenceInfo struct {
 	number         uint64
 	blockTimestamp uint64
 	references     []referenceEntry
-	err            error
 }
 
 // referenceEntry contains a single reference entry
@@ -105,10 +103,10 @@ func iterateReferences(db ethdb.Database, from uint64, to uint64, reverse bool, 
 		}()
 		for data := range rlpCh {
 			if data.header == nil {
-				err := fmt.Errorf("missing header")
-				log.Warn("Failed to read header for reference indexing", "block", data.number, "error", err)
+				log.Warn("Failed to read header for reference indexing", "block", data.number)
+				// Emit placeholder result to maintain contiguous block numbers
 				select {
-				case resultCh <- &blockReferenceInfo{number: data.number, err: err}:
+				case resultCh <- &blockReferenceInfo{number: data.number}:
 				case <-interrupt:
 					return
 				}
@@ -117,8 +115,9 @@ func iterateReferences(db ethdb.Database, from uint64, to uint64, reverse bool, 
 			var body types.Body
 			if err := rlp.DecodeBytes(data.rlp, &body); err != nil {
 				log.Warn("Failed to decode block body", "block", data.number, "error", err)
+				// Emit placeholder result to maintain contiguous block numbers
 				select {
-				case resultCh <- &blockReferenceInfo{number: data.number, blockTimestamp: data.header.Time, err: err}:
+				case resultCh <- &blockReferenceInfo{number: data.number, blockTimestamp: data.header.Time}:
 				case <-interrupt:
 					return
 				}
@@ -203,14 +202,6 @@ func indexReferences(db ethdb.Database, from uint64, to uint64, interrupt chan s
 			}
 			// Next block available, pop it off and index it
 			delivery := queue.PopItem().(*blockReferenceInfo)
-			if delivery.err != nil {
-				log.Warn("Aborting reference indexing at unreadable block", "block", delivery.number, "err", delivery.err)
-				WriteReferenceIndexTail(batch, lastNum)
-				if err := batch.Write(); err != nil {
-					log.Crit("Failed writing batch to db", "error", err)
-				}
-				return
-			}
 			lastNum = delivery.number
 			for _, ref := range delivery.references {
 				WriteReferenceIndexEntry(batch, ref.reference, delivery.blockTimestamp, ref.txIndex, ref.txHash)
@@ -296,14 +287,6 @@ func unindexReferences(db ethdb.Database, from uint64, to uint64, interrupt chan
 				break
 			}
 			delivery := queue.PopItem().(*blockReferenceInfo)
-			if delivery.err != nil {
-				log.Warn("Aborting reference unindexing at unreadable block", "block", delivery.number, "err", delivery.err)
-				WriteReferenceIndexTail(batch, nextNum)
-				if err := batch.Write(); err != nil {
-					log.Crit("Failed writing batch to db", "error", err)
-				}
-				return
-			}
 			nextNum = delivery.number + 1
 			for _, ref := range delivery.references {
 				DeleteReferenceIndexEntry(batch, ref.reference, delivery.blockTimestamp, ref.txIndex, ref.txHash)

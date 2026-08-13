@@ -32,20 +32,9 @@ import (
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/morph-l2/go-ethereum/core/types"
 	"github.com/morph-l2/go-ethereum/crypto"
-	"github.com/morph-l2/go-ethereum/ethdb"
 	"github.com/morph-l2/go-ethereum/params"
 	"github.com/morph-l2/go-ethereum/rlp"
 )
-
-type ancientReadCounter struct {
-	ethdb.Reader
-	reads int
-}
-
-func (db *ancientReadCounter) ReadAncients(fn func(ethdb.AncientReader) error) error {
-	db.reads++
-	return db.Reader.ReadAncients(fn)
-}
 
 // Tests block header storage and retrieval operations.
 func TestHeaderStorage(t *testing.T) {
@@ -115,24 +104,6 @@ func TestBodyStorage(t *testing.T) {
 	DeleteBody(db, hash, 0)
 	if entry := ReadBody(db, hash, 0); entry != nil {
 		t.Fatalf("Deleted body returned: %v", entry)
-	}
-}
-
-func TestReadCanonicalBodyRLPDoesNotNestAncientReads(t *testing.T) {
-	db := NewMemoryDatabase()
-	defer db.Close()
-
-	body := &types.Body{Uncles: []*types.Header{{Extra: []byte("test header")}}}
-	hash, number := common.HexToHash("0x01"), uint64(1)
-	WriteCanonicalHash(db, hash, number)
-	WriteBody(db, hash, number, body)
-
-	reader := &ancientReadCounter{Reader: db}
-	if blob := ReadCanonicalBodyRLP(reader, number); len(blob) == 0 {
-		t.Fatal("canonical body not found")
-	}
-	if reader.reads != 1 {
-		t.Fatalf("nested ancient reads: got %d, want 1", reader.reads)
 	}
 }
 

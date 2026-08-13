@@ -73,7 +73,6 @@ var Defaults = Config{
 	},
 	NetworkId:               1,
 	TxLookupLimit:           2350000,
-	HistoryBlocks:           0,
 	LightPeers:              100,
 	UltraLightFraction:      75,
 	DatabaseCache:           512,
@@ -140,7 +139,6 @@ type Config struct {
 	NoPrefetch bool // Whether to disable prefetching and only load state on demand
 
 	TxLookupLimit uint64 `toml:",omitempty"` // The maximum number of blocks from head whose tx indices are reserved.
-	HistoryBlocks uint64 `toml:",omitempty"` // The maximum number of recent blocks to retain (0 = entire chain).
 
 	// Whitelist of required block number -> hash values to accept
 	Whitelist map[uint64]common.Hash `toml:"-"`

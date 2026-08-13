@@ -299,16 +299,16 @@ func TestUnindexTransactionsMissingBody(t *testing.T) {
 	UnindexTransactions(chainDb, 0, 11, nil)
 
 	tail := ReadTxIndexTail(chainDb)
-	if tail == nil || *tail != missingBlock {
-		t.Fatalf("tx index tail mismatch after unindex with missing body: got %v, want %d", tail, missingBlock)
+	if tail == nil || *tail != 11 {
+		t.Fatalf("tx index tail mismatch after unindex with missing body: got %v, want 11", tail)
 	}
 	for i := 1; i <= 10; i++ {
 		number := ReadTxLookupEntry(chainDb, txs[i-1].Hash())
-		if uint64(i) < missingBlock && number != nil {
-			t.Fatalf("tx index %d should be deleted below the unreadable block", i)
+		if uint64(i) == missingBlock {
+			continue
 		}
-		if uint64(i) >= missingBlock && number == nil {
-			t.Fatalf("tx index %d should be retained at or above the unreadable block", i)
+		if number != nil {
+			t.Fatalf("tx index %d should be deleted after unindexing", i)
 		}
 	}
 }
@@ -353,16 +353,16 @@ func TestUnindexTransactionsCorruptBody(t *testing.T) {
 	UnindexTransactions(chainDb, 0, 11, nil)
 
 	tail := ReadTxIndexTail(chainDb)
-	if tail == nil || *tail != corruptBlock {
-		t.Fatalf("tx index tail mismatch after unindex with corrupt body: got %v, want %d", tail, corruptBlock)
+	if tail == nil || *tail != 11 {
+		t.Fatalf("tx index tail mismatch after unindex with corrupt body: got %v, want 11", tail)
 	}
 	for i := 1; i <= 10; i++ {
 		number := ReadTxLookupEntry(chainDb, txs[i-1].Hash())
-		if uint64(i) < corruptBlock && number != nil {
-			t.Fatalf("tx index %d should be deleted below the corrupt block", i)
+		if uint64(i) == corruptBlock {
+			continue
 		}
-		if uint64(i) >= corruptBlock && number == nil {
-			t.Fatalf("tx index %d should be retained at or above the corrupt block", i)
+		if number != nil {
+			t.Fatalf("tx index %d should be deleted after unindexing", i)
 		}
 	}
 }

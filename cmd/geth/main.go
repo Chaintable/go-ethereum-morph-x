@@ -101,7 +101,6 @@ var (
 		utils.GCModeFlag,
 		utils.SnapshotFlag,
 		utils.TxLookupLimitFlag,
-		utils.HistoryBlocksFlag,
 		utils.TriesInMemoryFlag,
 		utils.LightServeFlag,
 		utils.LightIngressFlag,
