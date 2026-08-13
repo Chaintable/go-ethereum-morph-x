@@ -418,8 +418,10 @@ func ReadCanonicalBodyRLP(db ethdb.Reader, number uint64) rlp.RawValue {
 		if len(data) > 0 {
 			return nil
 		}
-		// Get it by hash from leveldb
-		data, _ = db.Get(blockBodyKey(number, ReadCanonicalHash(db, number)))
+		// The freezer read lock is already held. Read the canonical hash directly
+		// from leveldb to avoid nesting ReadAncients behind a pending writer.
+		hash, _ := db.Get(headerHashKey(number))
+		data, _ = db.Get(blockBodyKey(number, common.BytesToHash(hash)))
 		return nil
 	})
 	return data
