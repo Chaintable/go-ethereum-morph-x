@@ -42,6 +42,8 @@ github.com/Chaintable/pipeline v0.0.63-op-v1.101603.5.0.20260812075329-1ed587eda
 github.com/Chaintable/pipeline v0.0.63-op-v1.101603.5.0.20260812075329-1ed587edabb2/go.mod h1:wXLyCRRAkIUYgCEVrfWtSHQTR0C81qSUua0CK9emgxQ=
 github.com/Chaintable/pipeline v0.0.69-0.20260814030800-e217db805202 h1:+wSOmHPqBLTpT12kWEmCKi07rfjeBSCY+da+m9YdvRM=
 github.com/Chaintable/pipeline v0.0.69-0.20260814030800-e217db805202/go.mod h1:wXLyCRRAkIUYgCEVrfWtSHQTR0C81qSUua0CK9emgxQ=
+github.com/Chaintable/pipeline v0.0.69-0.20260814032242-02c5051f6910 h1:QEbBfVWHZjeaI3Z4Vt5c3vVoz7VG3vMvBJkSmfvgPO0=
+github.com/Chaintable/pipeline v0.0.69-0.20260814032242-02c5051f6910/go.mod h1:wXLyCRRAkIUYgCEVrfWtSHQTR0C81qSUua0CK9emgxQ=
 github.com/DATA-DOG/go-sqlmock v1.3.3/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/StackExchange/wmi v1.2.1 h1:VIkavFPXSjcnS+O8yTq7NI32k0R5Aj+v39y29VYDOSA=
