@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/Azure/azure-storage-blob-go v0.7.0
-	github.com/Chaintable/pipeline v0.0.63-op-v1.101603.5.0.20260812075329-1ed587edabb2
+	github.com/Chaintable/pipeline v0.0.69-0.20260814030800-e217db805202
 	github.com/VictoriaMetrics/fastcache v1.12.2
 	github.com/aws/aws-sdk-go-v2 v1.32.5
 	github.com/aws/aws-sdk-go-v2/config v1.28.5
