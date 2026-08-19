@@ -48,6 +48,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		TrieTimeout             time.Duration
 		SnapshotCache           int
 		Preimages               bool
+		TriesInMemory           uint64
 		FilterLogCacheSize      int
 		LogQueryLimit           int
 		Miner                   miner.Config
@@ -102,6 +103,7 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.TrieTimeout = c.TrieTimeout
 	enc.SnapshotCache = c.SnapshotCache
 	enc.Preimages = c.Preimages
+	enc.TriesInMemory = c.TriesInMemory
 	enc.FilterLogCacheSize = c.FilterLogCacheSize
 	enc.LogQueryLimit = c.LogQueryLimit
 	enc.Miner = c.Miner
@@ -160,6 +162,7 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		TrieTimeout             *time.Duration
 		SnapshotCache           *int
 		Preimages               *bool
+		TriesInMemory           *uint64
 		FilterLogCacheSize      *int
 		LogQueryLimit           *int
 		Miner                   *miner.Config
@@ -276,6 +279,9 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.Preimages != nil {
 		c.Preimages = *dec.Preimages
+	}
+	if dec.TriesInMemory != nil {
+		c.TriesInMemory = *dec.TriesInMemory
 	}
 	if dec.FilterLogCacheSize != nil {
 		c.FilterLogCacheSize = *dec.FilterLogCacheSize
