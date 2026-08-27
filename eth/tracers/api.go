@@ -1597,8 +1597,10 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 
 	parentRoot := parent.Root()
 
-	res := rpcTracer.GetOutPut(parentRoot, block.Header().Root, destructs, accounts, storages, codes)
-
+	res, err := rpcTracer.GetOutPut(parentRoot, block.Header().Root, destructs, accounts, storages, codes)
+	if err != nil {
+		return nil, fmt.Errorf("could not build state diff: %w", err)
+	}
 	return res, nil
 }
 
