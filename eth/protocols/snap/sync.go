@@ -2042,7 +2042,9 @@ func (s *Syncer) processStorageResponse(res *storageResponse) {
 		if i < len(res.hashes)-1 || res.subTask == nil {
 			tr := trie.NewStackTrie(batch)
 			for j := 0; j < len(res.hashes[i]); j++ {
-				tr.Update(res.hashes[i][j][:], res.slots[i][j])
+				if err := tr.Update(res.hashes[i][j][:], res.slots[i][j]); err != nil {
+					panic(err) // Really shouldn't ever happen
+				}
 			}
 			tr.Commit()
 		}
@@ -2055,7 +2057,9 @@ func (s *Syncer) processStorageResponse(res *storageResponse) {
 			// If we're storing large contracts, generate the trie nodes
 			// on the fly to not trash the gluing points
 			if i == len(res.hashes)-1 && res.subTask != nil {
-				res.subTask.genTrie.Update(res.hashes[i][j][:], res.slots[i][j])
+				if err := res.subTask.genTrie.Update(res.hashes[i][j][:], res.slots[i][j]); err != nil {
+					panic(err) // Really shouldn't ever happen
+				}
 			}
 		}
 	}
@@ -2206,7 +2210,9 @@ func (s *Syncer) forwardAccountTask(task *accountTask) {
 			if err != nil {
 				panic(err) // Really shouldn't ever happen
 			}
-			task.genTrie.Update(hash[:], full)
+			if err := task.genTrie.Update(hash[:], full); err != nil {
+				panic(err) // Really shouldn't ever happen
+			}
 		}
 	}
 	// Flush anything written just now and update the stats
