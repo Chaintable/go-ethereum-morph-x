@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	pipelinetypes "github.com/Chaintable/pipeline/types"
 	"github.com/morph-l2/go-ethereum/common"
 	"github.com/morph-l2/go-ethereum/common/hexutil"
 	"github.com/morph-l2/go-ethereum/consensus"
@@ -44,6 +45,7 @@ import (
 	"github.com/morph-l2/go-ethereum/ethdb"
 	"github.com/morph-l2/go-ethereum/internal/ethapi"
 	"github.com/morph-l2/go-ethereum/params"
+	"github.com/morph-l2/go-ethereum/rlp"
 	"github.com/morph-l2/go-ethereum/rollup/fees"
 	"github.com/morph-l2/go-ethereum/rpc"
 	"github.com/stretchr/testify/require"
@@ -394,6 +396,142 @@ func TestTraceTransaction(t *testing.T) {
 	if !reflect.DeepEqual(have, want) {
 		t.Error("Transaction tracing result is different")
 	}
+}
+
+func TestDebankBlockIncludesEOAStateDiff(t *testing.T) {
+	accounts := newAccounts(2)
+	genesis := &core.Genesis{Alloc: core.GenesisAlloc{
+		accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+	}}
+	signer := types.HomesteadSigner{}
+	api := NewAPI(newTestBackend(t, 1, genesis, func(_ int, block *core.BlockGen) {
+		tx, err := types.SignTx(
+			types.NewTransaction(0, accounts[1].addr, big.NewInt(1000), params.TxGas, block.BaseFee(), nil),
+			signer,
+			accounts[0].key,
+		)
+		require.NoError(t, err)
+		block.AddTx(tx)
+	}), nil)
+
+	output, err := api.DebankBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(1))
+	require.NoError(t, err)
+
+	var diff pipelinetypes.BlockStorageDiff
+	require.NoError(t, rlp.DecodeBytes(output.StateDiff, &diff))
+
+	wantAddresses := map[common.Hash]bool{
+		crypto.Keccak256Hash(accounts[0].addr.Bytes()): false,
+		crypto.Keccak256Hash(accounts[1].addr.Bytes()): false,
+	}
+	for _, account := range diff.NewAccounts {
+		if _, ok := wantAddresses[account.Address]; ok {
+			wantAddresses[account.Address] = true
+		}
+	}
+	for address, found := range wantAddresses {
+		if !found {
+			t.Errorf("state diff missing account %s", address)
+		}
+	}
+}
+
+func TestDebankBlockStateDiffMatchesCanonicalState(t *testing.T) {
+	accounts := newAccounts(2)
+	setContract := common.HexToAddress("0x1001")
+	clearContract := common.HexToAddress("0x1002")
+	slot := common.Hash{}
+	storageCode := []byte{
+		byte(vm.PUSH1), 0,
+		byte(vm.CALLDATALOAD),
+		byte(vm.PUSH1), 0,
+		byte(vm.SSTORE),
+		byte(vm.STOP),
+	}
+	createdCode := []byte{byte(vm.STOP)}
+	initCode := []byte{
+		byte(vm.PUSH1), byte(len(createdCode)),
+		byte(vm.PUSH1), 12,
+		byte(vm.PUSH1), 0,
+		byte(vm.CODECOPY),
+		byte(vm.PUSH1), byte(len(createdCode)),
+		byte(vm.PUSH1), 0,
+		byte(vm.RETURN),
+	}
+	initCode = append(initCode, createdCode...)
+	createdContract := crypto.CreateAddress(accounts[0].addr, 3)
+	genesis := &core.Genesis{Alloc: core.GenesisAlloc{
+		accounts[0].addr: {Balance: big.NewInt(params.Ether)},
+		setContract:      {Code: storageCode, Balance: new(big.Int)},
+		clearContract: {
+			Code:    storageCode,
+			Balance: new(big.Int),
+			Storage: map[common.Hash]common.Hash{slot: common.HexToHash("0x07")},
+		},
+	}}
+	signer := types.HomesteadSigner{}
+	backend := newTestBackend(t, 1, genesis, func(_ int, block *core.BlockGen) {
+		transactions := []*types.Transaction{
+			types.NewTransaction(0, accounts[1].addr, big.NewInt(1000), params.TxGas, block.BaseFee(), nil),
+			types.NewTransaction(1, setContract, new(big.Int), 100000, block.BaseFee(), common.LeftPadBytes([]byte{42}, 32)),
+			types.NewTransaction(2, clearContract, new(big.Int), 100000, block.BaseFee(), make([]byte, 32)),
+			types.NewContractCreation(3, new(big.Int), 200000, block.BaseFee(), initCode),
+		}
+		for _, tx := range transactions {
+			signed, err := types.SignTx(tx, signer, accounts[0].key)
+			require.NoError(t, err)
+			block.AddTx(signed)
+		}
+	})
+	api := NewAPI(backend, nil)
+
+	output, err := api.DebankBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(1))
+	require.NoError(t, err)
+	var diff pipelinetypes.BlockStorageDiff
+	require.NoError(t, rlp.DecodeBytes(output.StateDiff, &diff))
+
+	block := backend.chain.GetBlockByNumber(1)
+	postState, err := backend.StateAtBlock(context.Background(), block, 0, nil, true, false)
+	require.NoError(t, err)
+	require.Equal(t, block.Root(), diff.Hash)
+	require.Equal(t, backend.chain.GetBlockByNumber(0).Root(), diff.ParentHash)
+
+	accountDiffs := make(map[common.Hash]pipelinetypes.NewAccount)
+	for _, account := range diff.NewAccounts {
+		accountDiffs[account.Address] = account
+	}
+	for _, address := range []common.Address{accounts[0].addr, accounts[1].addr, setContract, clearContract, createdContract} {
+		addressHash := crypto.Keccak256Hash(address.Bytes())
+		account, ok := accountDiffs[addressHash]
+		require.Truef(t, ok, "state diff missing account %s", address)
+		require.Zero(t, account.Balance.ToBig().Cmp(postState.GetBalance(address)), "balance mismatch for %s", address)
+		require.Equal(t, postState.GetNonce(address), account.Nonce, "nonce mismatch for %s", address)
+		require.Equal(t, crypto.Keccak256Hash(postState.GetCode(address)), account.CodeHash, "code hash mismatch for %s", address)
+	}
+
+	storageDiffs := make(map[common.Hash]map[common.Hash]*big.Int)
+	for _, account := range diff.StorageDiff {
+		values := make(map[common.Hash]*big.Int)
+		for _, pair := range account.Values {
+			values[pair.Index] = pair.Value.ToBig()
+		}
+		storageDiffs[account.Address] = values
+	}
+	slotHash := crypto.Keccak256Hash(slot.Bytes())
+	for _, address := range []common.Address{setContract, clearContract} {
+		addressHash := crypto.Keccak256Hash(address.Bytes())
+		value, ok := storageDiffs[addressHash][slotHash]
+		require.Truef(t, ok, "state diff missing storage %s[%s]", address, slot)
+		want := new(big.Int).SetBytes(postState.GetState(address, slot).Bytes())
+		require.Zero(t, value.Cmp(want), "storage mismatch for %s[%s]", address, slot)
+	}
+
+	newCodes := make(map[common.Hash][]byte)
+	for _, code := range diff.NewCodes {
+		newCodes[code.CodeHash] = code.Code
+	}
+	createdCodeHash := crypto.Keccak256Hash(createdCode)
+	require.Equal(t, createdCode, newCodes[createdCodeHash])
 }
 
 func TestTraceBlock(t *testing.T) {
