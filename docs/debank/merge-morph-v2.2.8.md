@@ -12,7 +12,7 @@ PR：https://github.com/Chaintable/go-ethereum-morph-x/pull/25
 
 官方发布内容全部如下：geth 删除 morph namespace 下的 block trace API；node 移除 tx-submitter 中未使用的 GetBlockTraceByNumber 接口，并将 devnet 所有 fee token 注册为 call mode。node/go.mod 与实际官方镜像二进制均确认 geth 依赖1c528b35（morph-v2.2.8）、Tendermint v0.3.11；devnet 修改不改变主网已部署的 token 注册。
 
-删除的 morph_getBlockTraceByNumberOrHash 和 morph_getTxBlockTraceOnTopOfBlock 不再作为 Morph RPC 暴露，原方法仍注册在 debug namespace；ethclient helpers 和 console bindings 同时移除。依赖旧 Morph 别名的调用方需调整。trace_debankBlock 是独立的自定义 API。
+本次删除的是 `morph` namespace 下的全部 tracer 别名。旧注册将 `*API` 转成 `TraceBlock` 接口，但 RPC 注册按动态类型 `*API` 反射，所以实际删除的普通 RPC 共13个：`morph_debankBlock`、`morph_getBlockTraceByNumberOrHash`、`morph_getTxBlockTraceOnTopOfBlock`、`morph_intermediateRoots`、`morph_standardTraceBadBlockToFile`、`morph_standardTraceBlockToFile`、`morph_traceBadBlock`、`morph_traceBlock`、`morph_traceBlockByHash`、`morph_traceBlockByNumber`、`morph_traceBlockFromFile`、`morph_traceCall`、`morph_traceTransaction`；另移除经 `morph_subscribe("traceChain", ...)` 访问的订阅。等价方法仍在 `debug` namespace，独立的 `trace_debankBlock` 保留。ethclient helpers 和 console bindings 同时移除。生产是否存在使用这些旧别名的外部消费者尚未验证，上线前需核对调用方/网关访问日志；不能将“源码中无消费者”当作“实际没有调用”。
 
 来源：[geth release](https://github.com/morph-l2/go-ethereum/releases/tag/morph-v2.2.8)、[node release](https://github.com/morph-l2/morph/releases/tag/v0.6.5)、[Tendermint diff](https://github.com/morph-l2/tendermint/compare/v0.3.10...v0.3.11)。官方 run-morph-node 的 main 部署模板本轮仍 pin geth2.2.6/node0.6.3，滞后于 Celadon；配套版本以 node0.6.5 的依赖 pin 为准。
 
@@ -35,7 +35,7 @@ geth8GiB/4CPU、node4GiB/2CPU；独立10.28.18.0/24；RPC/metrics仅绑定127.0.
 | 检查 | 结果 |
 |---|---|
 | go build ./...（Go1.27.1/macOS arm64） | PASS |
-| 四项DeBank tracer/state diff回归 | PASS |
+| 四项DeBank tracer/state diff回归 | PASS：TestDebankBlockIncludesEOAStateDiff、TestDebankBlockStateDiffMatchesCanonicalState、TestAddERC20BalanceDynamicSlotDiscovery、TestSyntheticPrecreditMaskPreservesPrestateTracerView |
 | params、rollup/fees包测试 | PASS |
 | ethclient包测试 | 两项基线失败，见下节 |
 | node derivation/types/version包测试 | PASS |
@@ -44,7 +44,7 @@ geth8GiB/4CPU、node4GiB/2CPU；独立10.28.18.0/24；RPC/metrics仅绑定127.0.
 | 官方RPC20块hash | 20/20 MATCH，29617736–29617755 |
 | 固定100块hash/stateRoot/receiptsRoot | 100/100 MATCH |
 | 完整trace_debankBlock与state diff | 100/100 MATCH |
-| 旧Morph RPC移除、对应debug方法保留 | PASS；自定义trace由100块实际调用覆盖 |
+| 两个旧GetBlockTrace别名移除、对应debug方法注册 | PASS；debug参数错误探测仅证明注册，不证明成功执行；自定义trace由100块实际调用覆盖 |
 | 优雅停止/重启 | 两进程exit0、OOM=false；约3秒完成停止和恢复 |
 | 追平与batch校验 | 07:42:31Z测试/生产latest29629937、safe29629676、finalized29628918及hash全部一致 |
 
@@ -55,6 +55,8 @@ geth首次启动07:34:50Z，node启动07:36:02Z；07:36:45–48Z优雅停止重�
 节点从Celadon激活后的11月11日快照启动，RPC回放覆盖11月4日分叉边界前后；这证明选定历史块的执行输出一致，不等于服务同步跨越实际分叉激活过程。测试没有运行ETL或生产上传/通知链路。
 
 ## 5. 其他问题与覆盖边界
+
+Claude独立只读审查未发现P0/P1；已复核并补全P2 API删除范围说明，以及P3 debug注册探测的覆盖表述。尚未检查外部旧别名流量。用户在本轮完成后将后续验证标准提高到1000块；上述记录仍是本轮实际100块，不改写历史数量。
 
 ethclient整包的TestToFilterArg与TestEthClient失败已在合并前ad2de3152基线复现，未跳过或修改测试；不能称全包测试通过。其他历史失败保留于此前2.2.7报告，本轮仅声明下表实际执行的覆盖。
 
