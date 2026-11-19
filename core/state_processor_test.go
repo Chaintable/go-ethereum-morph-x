@@ -18,6 +18,7 @@ package core
 
 import (
 	"crypto/ecdsa"
+	"errors"
 	"math/big"
 	"testing"
 
@@ -29,12 +30,47 @@ import (
 	"github.com/morph-l2/go-ethereum/consensus/ethash"
 	"github.com/morph-l2/go-ethereum/consensus/misc"
 	"github.com/morph-l2/go-ethereum/core/rawdb"
+	"github.com/morph-l2/go-ethereum/core/tracing"
 	"github.com/morph-l2/go-ethereum/core/types"
 	"github.com/morph-l2/go-ethereum/core/vm"
 	"github.com/morph-l2/go-ethereum/crypto"
 	"github.com/morph-l2/go-ethereum/params"
 	"github.com/morph-l2/go-ethereum/trie"
 )
+
+func TestTxEndHookOnValidationError(t *testing.T) {
+	db := rawdb.NewMemoryDatabase()
+	gspec := &Genesis{Config: params.TestChainConfig}
+	genesis := gspec.MustCommit(db)
+	var calls int
+	hooks := &tracing.Hooks{OnTxEnd: func(receipt *types.Receipt, err error) {
+		calls++
+		if receipt != nil || !errors.Is(err, ErrNonceTooHigh) {
+			t.Errorf("unexpected transaction end: receipt %v, error %v", receipt, err)
+		}
+	}}
+	engine := ethash.NewFaker()
+	chain, err := NewBlockChain(db, nil, gspec.Config, engine, vm.Config{Tracer: hooks}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer chain.Stop()
+
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := types.MustSignNewTx(key, types.LatestSigner(gspec.Config), &types.LegacyTx{
+		Nonce: 1, To: &common.Address{}, Gas: params.TxGas, GasPrice: big.NewInt(params.InitialBaseFee),
+	})
+	block := GenerateBadBlock(genesis, engine, types.Transactions{signed}, gspec.Config)
+	if _, err := chain.InsertChain(types.Blocks{block}); !errors.Is(err, ErrNonceTooHigh) {
+		t.Fatalf("unexpected block processing error: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("got %d transaction end callbacks, want 1", calls)
+	}
+}
 
 // TestStateProcessorErrors tests the output from the 'core' errors
 // as defined in core/error.go. These errors are generated when the
