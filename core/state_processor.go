@@ -139,7 +139,8 @@ func ApplyTransactionWithEVM(msg Message, config *params.ChainConfig, gp *GasPoo
 					hooks.OnTxEnd(nil, err)
 					return
 				}
-				if !config.IsCurie(blockNumber) {
+				// L1 messages use gas without paying the L2 base fee.
+				if tx.IsL1MessageTx() || !config.IsCurie(blockNumber) {
 					gasPrice = tx.GasPrice()
 				} else {
 					baseFee := evm.Context.BaseFee
