@@ -40,9 +40,11 @@ github.com/Chaintable/pipeline v0.0.69-morph-v2.2.4-ct.1 h1:TLmhaoB0BhVOxSVOKOb2
 github.com/Chaintable/pipeline v0.0.69-morph-v2.2.4-ct.1/go.mod h1:wXLyCRRAkIUYgCEVrfWtSHQTR0C81qSUua0CK9emgxQ=
 github.com/Chaintable/pipeline v0.0.69-morph-v2.2.4-ct.1.0.20260827100602-9170bbdf33a4 h1:VZe6jyX6G6hmMd4ja+beRENiVCXM/1dRqBIA4eSIHs0=
 github.com/Chaintable/pipeline v0.0.69-morph-v2.2.4-ct.1.0.20260827100602-9170bbdf33a4/go.mod h1:3aqtlvYsqTS7xl5wttscd0BKCMbBRkKHocUVinBzaUk=
-github.com/Chaintable/pipeline v0.0.70-morph-v2.2.4-ct.2 h1:l6jNFu57k7rv30o8ye//n4DQuKbotSMAEZ6DQijnnD4=
-github.com/Chaintable/pipeline v0.0.70-morph-v2.2.4-ct.2/go.mod h1:3aqtlvYsqTS7xl5wttscd0BKCMbBRkKHocUVinBzaUk=
+github.com/Chaintable/pipeline v0.0.70-morph-v2.2.8-ct.1 h1:rac0oXPW/4UecdEG0gi03nfkUX+HpulsIMwwyxSnwN4=
+github.com/Chaintable/pipeline v0.0.70-morph-v2.2.8-ct.1/go.mod h1:VKg25aY52Te9Tr1pc2QGXAoVXS7bKF3AVVTeHhAhML8=
 github.com/DATA-DOG/go-sqlmock v1.3.3/go.mod h1:f/Ixk793poVmq4qj/V1dPUg2JEAKC73Q5eFN3EC/SaM=
+github.com/Masterminds/semver/v3 v3.2.1 h1:RN9w6+7QoMeJVGyfmbcgs28Br8cvmnucEXnY0rYXWg0=
+github.com/Masterminds/semver/v3 v3.2.1/go.mod h1:qvl/7zhW3nngYb5+80sSMF+FG2BjYrf8m9wsX0PNOMQ=
 github.com/OneOfOne/xxhash v1.2.2/go.mod h1:HSdplMjZKSmBqAxg5vPj2TmRDmfkzw+cTzAElWljhcU=
 github.com/StackExchange/wmi v1.2.1 h1:VIkavFPXSjcnS+O8yTq7NI32k0R5Aj+v39y29VYDOSA=
 github.com/StackExchange/wmi v1.2.1/go.mod h1:rcmrprowKIVzvc+NUiLncP2uuArMWLCbu9SBzvHz7e8=
@@ -740,6 +742,8 @@ golang.org/x/xerrors v0.0.0-20191011141410-1b5146add898/go.mod h1:I/5z698sn9Ka8T
 golang.org/x/xerrors v0.0.0-20191204190536-9bdfabe68543/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
 golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 h1:go1bK/D/BFZV2I8cIQd1NKEZ+0owSTG1fDTci4IqFcE=
 golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1/go.mod h1:I/5z698sn9Ka8TeJc9MKroUUfqBBauWjQqLJ2OPfmY0=
+golang.org/x/xerrors v0.0.0-20220517211312-f3a8303e98df h1:5Pf6pFKu98ODmgnpvkJ3kFUOQGGLIzLIkbzUHp47618=
+golang.org/x/xerrors v0.0.0-20220517211312-f3a8303e98df/go.mod h1:K8+ghG5WaK9qNqU5K3HdILfMLy1f3aNYFI/wnl100a8=
 gonum.org/v1/gonum v0.0.0-20180816165407-929014505bf4/go.mod h1:Y+Yx5eoAFn32cQvJDxZx5Dpnq+c3wtXuadVZAcxbbBo=
 gonum.org/v1/gonum v0.0.0-20181121035319-3f7ecaa7e8ca/go.mod h1:Y+Yx5eoAFn32cQvJDxZx5Dpnq+c3wtXuadVZAcxbbBo=
 gonum.org/v1/gonum v0.6.0/go.mod h1:9mxDZsDKxgMAuccQkewq682L+0eCu4dCN2yonUJTCLU=
