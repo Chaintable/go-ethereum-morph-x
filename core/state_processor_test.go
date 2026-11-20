@@ -30,6 +30,7 @@ import (
 	"github.com/morph-l2/go-ethereum/consensus/ethash"
 	"github.com/morph-l2/go-ethereum/consensus/misc"
 	"github.com/morph-l2/go-ethereum/core/rawdb"
+	"github.com/morph-l2/go-ethereum/core/state"
 	"github.com/morph-l2/go-ethereum/core/tracing"
 	"github.com/morph-l2/go-ethereum/core/types"
 	"github.com/morph-l2/go-ethereum/core/vm"
@@ -69,6 +70,26 @@ func TestTxEndHookOnValidationError(t *testing.T) {
 	}
 	if calls != 1 {
 		t.Fatalf("got %d transaction end callbacks, want 1", calls)
+	}
+}
+
+func TestL1MessageTraceGasPrice(t *testing.T) {
+	cfg := params.MorphMainnetChainConfig
+	header := &types.Header{Number: big.NewInt(19720358), BaseFee: big.NewInt(1000000), Difficulty: new(big.Int)}
+	to := common.HexToAddress("0x1234")
+	tx := types.NewTx(&types.L1MessageTx{To: &to, Gas: 100000, Value: new(big.Int)})
+	st, err := state.New(common.Hash{}, state.NewDatabase(rawdb.NewMemoryDatabase()), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var traced *types.Receipt
+	hooks := &tracing.Hooks{OnTxEnd: func(receipt *types.Receipt, err error) { traced = receipt }}
+	_, err = ApplyTransaction(cfg, nil, nil, new(GasPool).AddGas(tx.Gas()), st, header, tx, new(uint64), vm.Config{Tracer: hooks})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traced == nil || traced.GasUsed == 0 || traced.EffectiveGasPrice == nil || traced.EffectiveGasPrice.Sign() != 0 {
+		t.Fatalf("expected used gas and zero effective gas price, got %+v", traced)
 	}
 }
 

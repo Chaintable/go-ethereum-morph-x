@@ -398,6 +398,27 @@ func TestTraceTransaction(t *testing.T) {
 	}
 }
 
+type wrongReceiptRootBackend struct{ *testBackend }
+
+func (b wrongReceiptRootBackend) BlockByNumber(ctx context.Context, n rpc.BlockNumber) (*types.Block, error) {
+	block, err := b.testBackend.BlockByNumber(ctx, n)
+	if err != nil || n != 1 {
+		return block, err
+	}
+	header := block.Header()
+	header.ReceiptHash = common.HexToHash("0xbad")
+	return block.WithSeal(header), nil
+}
+
+func TestDebankBlockRejectsWrongReceiptRoot(t *testing.T) {
+	backend := newTestBackend(t, 1, &core.Genesis{}, nil)
+	defer backend.chain.Stop()
+	api := NewAPI(wrongReceiptRootBackend{backend}, nil)
+	output, err := api.DebankBlock(context.Background(), rpc.BlockNumberOrHashWithNumber(1))
+	require.Nil(t, output)
+	require.ErrorContains(t, err, "receipt root mismatch")
+}
+
 func TestDebankBlockIncludesEOAStateDiff(t *testing.T) {
 	accounts := newAccounts(2)
 	genesis := &core.Genesis{Alloc: core.GenesisAlloc{

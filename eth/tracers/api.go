@@ -54,6 +54,7 @@ import (
 	"github.com/morph-l2/go-ethereum/rlp"
 	"github.com/morph-l2/go-ethereum/rollup/fees"
 	"github.com/morph-l2/go-ethereum/rpc"
+	"github.com/morph-l2/go-ethereum/trie"
 )
 
 const (
@@ -1559,10 +1560,12 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 	rpcTracer.OnBlockStart(block)
 
 	var (
-		txs     = block.Transactions()
-		signer  = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
-		gp      = new(core.GasPool).AddGas(block.GasLimit())
-		usedGas = new(uint64)
+		txs         = block.Transactions()
+		signer      = types.MakeSigner(api.backend.ChainConfig(), block.Number(), block.Time())
+		gp          = new(core.GasPool).AddGas(block.GasLimit())
+		usedGas     = new(uint64)
+		receipts    = make(types.Receipts, 0, len(txs))
+		receiptLogs []*types.Log
 	)
 
 	for i, tx := range txs {
@@ -1579,7 +1582,12 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 		if err != nil {
 			return nil, fmt.Errorf("could not apply tx %d [%v]: %w", i, tx.Hash().Hex(), err)
 		}
-		_ = receipt
+		receipts = append(receipts, receipt)
+		receiptLogs = append(receiptLogs, receipt.Logs...)
+	}
+
+	if root := types.DeriveSha(receipts, trie.NewStackTrie(nil)); root != block.ReceiptHash() {
+		return nil, fmt.Errorf("block %d (%s): receipt root mismatch: header %s, replay %s", block.NumberU64(), block.Hash(), block.ReceiptHash(), root)
 	}
 
 	// Get state diff
@@ -1600,6 +1608,9 @@ func (api *API) DebankBlock(ctx context.Context, blockNrOrHash rpc.BlockNumberOr
 	res, err := rpcTracer.GetOutPut(parentRoot, block.Header().Root, destructs, accounts, storages, codes)
 	if err != nil {
 		return nil, fmt.Errorf("could not build state diff: %w", err)
+	}
+	if err := validateReplayEvents(res.BlockFile, receiptLogs); err != nil {
+		return nil, fmt.Errorf("block %d (%s): %w", block.NumberU64(), block.Hash(), err)
 	}
 	return res, nil
 }
